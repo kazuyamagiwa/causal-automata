@@ -1,0 +1,52 @@
+[project]
+name = "causal-automata"
+version = "0.1.0"
+description = "A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery."
+readme = "README.md"
+authors = [
+    { name = "Masakazu Yamagiwa", email = "myamagiwa@gmail.com" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+# Core runtime (CPU-friendly). Accelerator / gCastle stacks are optional extras
+# because ``jax[cuda13]`` wheels are NVIDIA-specific; see README Colab install.
+dependencies = [
+    "numpy>=1.26",
+    "networkx>=3.2",
+    "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+# Full Colab / NVIDIA stack (requested deps): jax[cuda13], torch, gcastle
+cuda = [
+    "jax[cuda13]",
+    "torch>=2.1",
+    "gcastle>=1.0.4",
+]
+# Portable CPU JAX (no CUDA wheel)
+jax = [
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+]
+# gCastle PC / GOLEM benchmarks (pulls torch)
+gcastle = [
+    "gcastle>=1.0.4",
+    "torch>=2.1",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+causal-automata-synth = "causal_automata.bayesian_synth:main"
+causal-automata-benchmark = "causal_automata.benchmark:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["causal_automata*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
