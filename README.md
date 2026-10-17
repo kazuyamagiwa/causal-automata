@@ -40,7 +40,7 @@ Final figures (Colab **Tesla T4**, GOLEM `num_iter=20000`):
 | GOLEM (gcastle) | 0.577 | 0.403 | 251.182 |
 | Bayesian CA (JAX) | 0.812 | 0.483 | 0.323 |
 
-Bayesian CA is ~**778×** faster than GOLEM and ~**1636×** faster than PC, while beating GOLEM on both skeleton (**0.812 vs 0.577**) and directed (**0.483 vs 0.403**) F1.
+In this setup, Bayesian CA runs in **0.323s**, compared with **251.182s** for GOLEM and **528.631s** for PC, with skeleton / directed F1 of **0.812 / 0.483** versus GOLEM **0.577 / 0.403** (PC: **0.968 / 0.813**).
 
 ## Documentation
 

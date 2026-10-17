@@ -12,9 +12,10 @@ GOLEM (gCastle)     0.577         0.403         251.182
 Bayesian CA (JAX)   0.812         0.483         0.323
 =================== ============= ============= ==============
 
-Bayesian CA is roughly **778×** faster than GOLEM and **1636×** faster
-than PC in this setup, while beating GOLEM on both skeleton
-(``0.812`` vs ``0.577``) and directed (``0.483`` vs ``0.403``) F1.
+In this setup, Bayesian CA completes in ``0.323s``, compared with
+``251.182s`` for GOLEM and ``528.631s`` for PC. Skeleton / directed F1
+are ``0.812`` / ``0.483`` for Bayesian CA, ``0.577`` / ``0.403`` for
+GOLEM, and ``0.968`` / ``0.813`` for PC.
 
 Reproduce
 ---------
@@ -45,5 +46,5 @@ Interpreting metrics
   excluded; CA compile excluded).
 
 PC remains a strong accuracy baseline when runtime is acceptable. The
-automaton targets the regime where sequential CI testing or long Adam
-runs become the bottleneck.
+automaton is aimed at settings where parallel adjacency updates are a
+useful alternative to sequential CI testing or long Adam runs.

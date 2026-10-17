@@ -6,11 +6,10 @@ causal-automata
 observational data by evolving an adjacency matrix under physics-inspired
 local rules.
 
-Instead of sequential conditional-independence searches (PC) or slow
-continuous optimization (GOLEM), the engine treats edges as particles on a
-grid. Gravity, V-wells (collider sinks), birth, and death update every
-candidate edge in parallel — typically recovering an :math:`N=100` graph
-in a fraction of a second on GPU.
+Alongside constraint-based search (PC) and continuous score-based
+methods (GOLEM), the engine treats edges as particles on a grid. Gravity,
+V-wells (collider sinks), birth, and death update every candidate edge in
+parallel, with wall times reported under :doc:`benchmarks`.
 
 .. code-block:: bash
 

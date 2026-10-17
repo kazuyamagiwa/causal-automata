@@ -94,16 +94,16 @@ assigns each node a continuous **elevation** :math:`E \in [0, 1]` and
 enforces a hard rule: edges may only flow downhill. Because arrows
 cannot point upward, cycles are impossible.
 
-Why parallel physics beats sequential search
---------------------------------------------
+Parallel physics as an alternative to sequential search
+-------------------------------------------------------
 
 Constraint-based methods (PC) run sequential independence tests.
 Continuous optimizers (GOLEM) score DAGs with gradient descent. Both are
-accurate in theory but scale poorly when every pair and conditioning set
-is visited one at a time.
+accurate in theory; their cost grows when many pairs and conditioning
+sets are evaluated one at a time.
 
 The Causal Automaton reframes structure learning as a physical
 simulation: map variables to a grid, define local forces (gravity,
-sinks, birth, death), and let the DAG emerge from massively parallel
-state updates. On GPU, the transition is dense linear algebra — see
+sinks, birth, death), and let the DAG emerge from parallel state
+updates. On GPU, the transition is dense linear algebra — see
 :doc:`physics` and :doc:`benchmarks`.
