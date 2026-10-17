@@ -1,0 +1,34 @@
+name: Publish to PyPI
+
+# This triggers the workflow when you publish a new Release on GitHub
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    name: Build and publish Python distribution
+    runs-on: ubuntu-latest
+    
+    # Optional: If you specified 'pypi' in PyPI's Environment Name field
+    environment: pypi 
+    
+    # CRITICAL: This permission allows GitHub to request the OIDC token from PyPI
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5 # The official astral action
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Publish to PyPI
+        # uv automatically detects the GitHub Action environment, 
+        # requests the OIDC token, and publishes the contents of dist/
+        run: uv publish
