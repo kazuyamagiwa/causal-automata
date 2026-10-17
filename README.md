@@ -14,6 +14,17 @@ Final figures (Colab **Tesla T4**, GOLEM `num_iter=20000`):
 
 Bayesian CA is ~**778×** faster than GOLEM and ~**1636×** faster than PC, while beating GOLEM on both skeleton (**0.812 vs 0.577**) and directed (**0.483 vs 0.403**) F1.
 
+## Documentation
+
+Full docs (theory, physics, API, CLI): https://causal-automata.readthedocs.io/en/latest/
+
+Build locally from `docs/`:
+
+```bash
+pip install -e ".[docs,jax]"
+cd docs && make html
+```
+
 ## How it works — CA physics + V-well
 
 State is a binary DAG adjacency `A`, node elevations `E ∈ [0,1]`, and a fixed empirical covariance `Cov` from continuous observations. Each tick is a local cellular update:
@@ -64,19 +75,6 @@ Smoke the JAX compile:
 ```bash
 python -c "from causal_automata import warmup; print(warmup())"
 ```
-
-## Documentation
-
-Sphinx docs (Read the Docs) live under `docs/`. Build locally:
-
-```bash
-pip install -e ".[docs,jax]"
-cd docs && make html
-```
-
-Configuration for hosted builds is in `.readthedocs.yaml`. Theory pages
-summarize the project manuscripts on causal / Bayesian automata; API pages
-are generated from module docstrings via autodoc.
 
 ## Package layout
 
