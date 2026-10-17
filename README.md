@@ -4,27 +4,31 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/causal-automata.svg)](https://pypi.org/project/causal-automata/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-## Installation
+A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery.
 
-Install the base package via `pip`:
+## Installation
 
 ```bash
 pip install causal-automata
 ```
 
-For GPU acceleration (JAX with CUDA support):
+With CPU JAX:
 
 ```bash
-pip install "causal-automata[gpu]"
+pip install "causal-automata[jax]"
+```
+
+With NVIDIA CUDA JAX (and the Colab-style stack):
+
+```bash
+pip install "causal-automata[cuda]"
 ```
 
 Or using `uv`:
 
 ```bash
-uv add "causal-automata[gpu]"
+uv add "causal-automata[jax]"
 ```
-
-A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery.
 
 ## Benchmark — N=100 on Tesla T4
 
@@ -42,13 +46,6 @@ Bayesian CA is ~**778×** faster than GOLEM and ~**1636×** faster than PC, whil
 
 Full docs (theory, physics, API, CLI): https://causal-automata.readthedocs.io/en/latest/
 
-Build locally from `docs/`:
-
-```bash
-pip install -e ".[docs,jax]"
-cd docs && make html
-```
-
 ## How it works — CA physics + V-well
 
 State is a binary DAG adjacency `A`, node elevations `E ∈ [0,1]`, and a fixed empirical covariance `Cov` from continuous observations. Each tick is a local cellular update:
@@ -58,27 +55,6 @@ State is a binary DAG adjacency `A`, node elevations `E ∈ [0,1]`, and a fixed 
 3. **Death / birth** — kill weak edges and birth strong ones using partial correlations conditioned on the top-`k` union neighbors ranked by `|Cov|`. Birth orients by elevation after the `|ρ|` gate.
 
 The NumPy prototype (`bayesian.step`) and the pure functional JAX port (`jax_core.step`, `@jax.jit`) share this physics.
-
-## Install (Colab T4 / CUDA)
-
-```bash
-# Runtime → Change runtime type → T4 GPU
-pip install -U "jax[cuda13]" gcastle torch networkx scikit-learn numpy
-pip install -e .
-```
-
-CPU / portable (no CUDA wheel):
-
-```bash
-pip install -e ".[jax,gcastle]"
-# or: uv sync --extra jax --extra gcastle
-```
-
-Full NVIDIA extra (mirrors the Colab stack in project metadata):
-
-```bash
-pip install -e ".[cuda]"
-```
 
 ## Run
 
@@ -99,19 +75,6 @@ Smoke the JAX compile:
 ```bash
 python -c "from causal_automata import warmup; print(warmup())"
 ```
-
-## Documentation
-
-Sphinx docs (Read the Docs) live under `docs/`. Build locally:
-
-```bash
-pip install -e ".[docs,jax]"
-cd docs && make html
-```
-
-Configuration for hosted builds is in `.readthedocs.yaml`. Theory pages
-summarize the project manuscripts on causal / Bayesian automata; API pages
-are generated from module docstrings via autodoc.
 
 ## Package layout
 
