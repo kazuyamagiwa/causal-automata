@@ -1,7 +1,7 @@
 # causal-automata
 
 [![PyPI Version](https://img.shields.io/pypi/v/causal-automata.svg?cacheSeconds=3600&bust=1)](https://pypi.org/project/causal-automata/)
-[![Python Versions](https://img.shields.io/pypi/pyversions/causal-automata.svg)](https://pypi.org/project/causal-automata/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/causal-automata.svg?cache=1)](https://pypi.org/project/causal-automata/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery.
