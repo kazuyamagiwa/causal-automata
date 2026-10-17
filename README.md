@@ -1,5 +1,29 @@
 # causal-automata
 
+[![PyPI Version](https://img.shields.io/pypi/v/causal-automata.svg)](https://pypi.org/project/causal-automata/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/causal-automata.svg)](https://pypi.org/project/causal-automata/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+## Installation
+
+Install the base package via `pip`:
+
+```bash
+pip install causal-automata
+```
+
+For GPU acceleration (JAX with CUDA support):
+
+```bash
+pip install "causal-automata[gpu]"
+```
+
+Or using `uv`:
+
+```bash
+uv add "causal-automata[gpu]"
+```
+
 A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery.
 
 ## Benchmark — N=100 on Tesla T4
