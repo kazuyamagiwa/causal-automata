@@ -36,6 +36,11 @@ gcastle = [
 dev = [
     "pytest>=8.0",
 ]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+    "myst-parser>=2.0",
+]
 
 [project.scripts]
 causal-automata-synth = "causal_automata.bayesian_synth:main"

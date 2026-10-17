@@ -1,0 +1,76 @@
+Quickstart
+==========
+
+Minimal discovery loop
+----------------------
+
+The public API centers on a single tick function. The package exports the
+JIT-compiled JAX step as :func:`causal_automata.step` and the NumPy
+prototype as :func:`causal_automata.numpy_step`.
+
+.. code-block:: python
+
+   import numpy as np
+   from causal_automata import step, warmup
+   from causal_automata.bayesian_synth import prepare_synthetic_bundle
+
+   print(warmup())  # compile + device string
+
+   bundle = prepare_synthetic_bundle(n=10, seed=0)
+   A, E, Cov = bundle.A_init, bundle.E_init, bundle.Cov
+
+   for _ in range(100):
+       A, E = step(A, E, Cov, k=3)
+
+   print("Predicted edges:", int((A > 0).sum()))
+
+State variables
+---------------
+
+=========== ===============================================================
+Symbol      Meaning
+=========== ===============================================================
+``A``       Binary adjacency :math:`(N, N)`. ``A[i, j] = 1`` means
+            directed edge :math:`i \to j`.
+``E``       Node elevations :math:`(N,)` in :math:`[0, 1]`. Arrows may
+            only point *downhill* (:math:`E_{\mathrm{parent}} >
+            E_{\mathrm{child}}`), which enforces acyclicity.
+``Cov``     Fixed empirical covariance of continuous observations.
+=========== ===============================================================
+
+Each call to ``step`` applies, in order:
+
+1. **Gravity** — drop uphill edges; drift elevations toward the midpoint of
+   parent and child means.
+2. **V-well** — sink elevations of collider nodes detected from marginally
+   independent pairs that share neighbors.
+3. **Death / birth** — prune weak and spawn strong edges using partial
+   correlations conditioned on the top-``k`` union neighbors ranked by
+   :math:`|\mathrm{Cov}|`. Birth orients by elevation after the
+   :math:`|\rho|` gate.
+
+NumPy vs JAX
+------------
+
+.. code-block:: python
+
+   from causal_automata.bayesian import step as numpy_step
+   from causal_automata.jax_core import step as jax_step
+
+   A1, E1 = numpy_step(A, E, Cov, threshold_birth=0.10, k=3)
+   A2, E2 = jax_step(A, E, Cov, threshold_birth=0.10, k=3)
+
+Both backends share the same physics. Prefer JAX when ``N`` is large or a
+GPU is available; prefer NumPy for debugging and environments without JAX.
+
+Synthetic end-to-end harness
+----------------------------
+
+.. code-block:: bash
+
+   python -m causal_automata.bayesian_synth --n 10
+   python -m causal_automata.bayesian_synth --n 50 --backend jax
+   python -m causal_automata.bayesian_synth --n 100 --seeds 5
+
+See :doc:`cli` for the full flag list and :doc:`benchmarks` for comparison
+against gCastle PC and GOLEM.

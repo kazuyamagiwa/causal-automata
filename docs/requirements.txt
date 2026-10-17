@@ -1,0 +1,10 @@
+# Fallback pin set for local ``pip install -r docs/requirements.txt``.
+# Read the Docs installs the project via ``.readthedocs.yaml`` extras.
+sphinx>=7.0
+sphinx-rtd-theme>=2.0
+myst-parser>=2.0
+numpy>=1.26
+networkx>=3.2
+scikit-learn>=1.4
+jax>=0.4.30
+jaxlib>=0.4.30

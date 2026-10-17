@@ -17,3 +17,7 @@ wheels/
 .ruff_cache/
 .mypy_cache/
 *.png
+
+# Sphinx / Read the Docs
+docs/_build/
+docs/_autosummary/
