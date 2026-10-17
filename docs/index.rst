@@ -11,11 +11,7 @@ methods (GOLEM), the engine treats edges as particles on a grid. Gravity,
 V-wells (collider sinks), birth, and death update every candidate edge in
 parallel, with wall times reported under :doc:`benchmarks`.
 
-.. code-block:: bash
-
-   pip install -e ".[jax]"
-   python -m causal_automata.bayesian_synth --n 10
-   python -c "from causal_automata import warmup; print(warmup())"
+See :doc:`installation` and :doc:`quickstart` to get started.
 
 .. toctree::
    :maxdepth: 2
