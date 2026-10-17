@@ -65,6 +65,19 @@ Smoke the JAX compile:
 python -c "from causal_automata import warmup; print(warmup())"
 ```
 
+## Documentation
+
+Sphinx docs (Read the Docs) live under `docs/`. Build locally:
+
+```bash
+pip install -e ".[docs,jax]"
+cd docs && make html
+```
+
+Configuration for hosted builds is in `.readthedocs.yaml`. Theory pages
+summarize the project manuscripts on causal / Bayesian automata; API pages
+are generated from module docstrings via autodoc.
+
 ## Package layout
 
 ```
@@ -75,6 +88,8 @@ causal-automata/
 │   ├── bayesian_synth.py    # Synthetic linear-DAG harness
 │   ├── jax_core.py          # JAX @jit port of step
 │   └── benchmark.py         # vs gCastle PC / GOLEM
+├── docs/                    # Sphinx / Read the Docs
+├── .readthedocs.yaml
 ├── pyproject.toml
 ├── README.md
 └── NOTICE
