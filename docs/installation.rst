@@ -8,37 +8,40 @@ Requirements
 * Core stack: NumPy, NetworkX, scikit-learn
 * Optional: JAX (CPU or CUDA), gCastle + PyTorch for benchmarks
 
-Core (CPU)
-----------
+From PyPI
+---------
 
 .. code-block:: bash
+
+   pip install causal-automata
+   pip install "causal-automata[jax]"     # CPU JAX
+   pip install "causal-automata[cuda]"    # NVIDIA CUDA JAX + Colab-style stack
+   pip install "causal-automata[gcastle]" # PC / GOLEM benchmarks
+
+Or with ``uv``::
+
+   uv add "causal-automata[jax]"
+
+From a source checkout (contributors)
+-------------------------------------
+
+Editable install while developing the repo::
 
    pip install -e .
-
-or, with an editable checkout and optional extras:
-
-.. code-block:: bash
-
    pip install -e ".[jax]"
-   pip install -e ".[gcastle]"
-   pip install -e ".[docs]"   # Sphinx + RTD theme for local builds
+   pip install -e ".[docs]"   # Sphinx + RTD theme for local doc builds
 
 JAX accelerators
 ----------------
 
 **Portable CPU JAX** (no NVIDIA wheel)::
 
-   pip install -e ".[jax]"
+   pip install "causal-automata[jax]"
 
 **NVIDIA / Colab T4** (CUDA 13 wheels; see current JAX install docs)::
 
    # Runtime → Change runtime type → T4 GPU
-   pip install -U "jax[cuda13]" gcastle torch networkx scikit-learn numpy
-   pip install -e .
-
-**Full NVIDIA extra** (mirrors the Colab stack in project metadata)::
-
-   pip install -e ".[cuda]"
+   pip install "causal-automata[cuda]"
 
 Smoke the JAX compile after install::
 
@@ -47,7 +50,9 @@ Smoke the JAX compile after install::
 Build the docs locally
 ----------------------
 
-.. code-block:: bash
+Hosted docs: https://causal-automata.readthedocs.io/en/latest/
+
+From a checkout::
 
    pip install -e ".[docs,jax]"
    cd docs && make html
