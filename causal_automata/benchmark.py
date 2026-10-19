@@ -17,6 +17,10 @@ Run::
     uv run python -m causal_automata.benchmark
     uv run python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
 
+    # CA-only upgrade A/B (skip PC / GOLEM):
+    uv run python -m causal_automata.benchmark --n 50 --ca-only
+    uv run python -m causal_automata.benchmark --n 50 --ca-only --anneal
+
     # CPU / no-GPU smoke (import + GOLEM init only; no invented GPU timings):
     uv run python -m causal_automata.benchmark --smoke
 """
@@ -303,6 +307,10 @@ def run_jax_ca(
             f"Import error: {exc}"
         ) from exc
 
+    A = jnp.asarray(A_init)
+    E = jnp.asarray(E_init)
+    Cov_j = jnp.asarray(Cov)
+
     if anneal:
         death_end = (
             ANNEAL_DEATH_END if threshold_death_end is None else threshold_death_end
@@ -312,58 +320,56 @@ def run_jax_ca(
         )
         death_start = threshold_death_start
         birth_start = threshold_birth_start
-    else:
-        # Static schedule: start == end (progress irrelevant).
-        death_end = threshold_death
-        birth_end = threshold_birth
-        death_start = threshold_death
-        birth_start = threshold_birth
+        denom = max(ticks - 1, 1)
 
-    A = jnp.asarray(A_init)
-    E = jnp.asarray(E_init)
-    Cov_j = jnp.asarray(Cov)
-    denom = max(ticks - 1, 1)
+        def _call(tick: int):
+            return jax_step(
+                A,
+                E,
+                Cov_j,
+                learning_rate=learning_rate,
+                threshold_death=death_end,
+                threshold_birth=birth_end,
+                k=k,
+                anneal=True,
+                progress=float(tick) / float(denom),
+                threshold_death_start=death_start,
+                threshold_birth_start=birth_start,
+            )
 
-    def _progress(tick: int) -> float:
-        return float(tick) / float(denom)
-
-    # Warmup compile outside the timed window (traced scalars; one compile).
-    jax_step(
-        A,
-        E,
-        Cov_j,
-        learning_rate=learning_rate,
-        threshold_death=death_end,
-        threshold_birth=birth_end,
-        k=k,
-        progress=_progress(0),
-        threshold_death_start=death_start,
-        threshold_birth_start=birth_start,
-    )
-    t0 = time.perf_counter()
-    for tick in range(ticks):
-        A, E = jax_step(
-            A,
-            E,
-            Cov_j,
-            learning_rate=learning_rate,
-            threshold_death=death_end,
-            threshold_birth=birth_end,
-            k=k,
-            progress=_progress(tick),
-            threshold_death_start=death_start,
-            threshold_birth_start=birth_start,
-        )
-    elapsed = time.perf_counter() - t0
-    A_pred = _as_binary_adj(np.asarray(A).copy())
-    d, s = _score(A_pred, A_true)
-    if anneal:
         schedule = (
             f"anneal death {death_start:.2f}→{death_end:.2f} "
             f"birth {birth_start:.2f}→{birth_end:.2f}"
         )
     else:
+        # Historical static Phase-6 gates; no progress / start knobs.
+        death_end = threshold_death
+        birth_end = threshold_birth
+
+        def _call(_tick: int):
+            return jax_step(
+                A,
+                E,
+                Cov_j,
+                learning_rate=learning_rate,
+                threshold_death=death_end,
+                threshold_birth=birth_end,
+                k=k,
+                anneal=False,
+            )
+
         schedule = f"static death={death_end:.2f} birth={birth_end:.2f}"
+
+    # Warmup compile outside the timed window (discard result; re-init state).
+    _ = _call(0)
+    A = jnp.asarray(A_init)
+    E = jnp.asarray(E_init)
+    t0 = time.perf_counter()
+    for tick in range(ticks):
+        A, E = _call(tick)
+    elapsed = time.perf_counter() - t0
+    A_pred = _as_binary_adj(np.asarray(A).copy())
+    d, s = _score(A_pred, A_true)
     return BenchRow(
         algorithm="Bayesian CA (JAX)",
         skeleton_f1=s.f1,

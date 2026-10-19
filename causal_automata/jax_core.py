@@ -15,9 +15,9 @@ Smoke::
     from causal_automata.jax_core import step, device_info
     A1, E1 = step(A, E, Cov)  # jit-compiled on first call
 
-Adaptive thresholds (Upgrade 1):: pass ``progress`` in ``[0, 1]`` plus
-optional ``threshold_*_start`` endpoints. Linear anneal is a traced scalar
-update inside the existing ``@jax.jit`` — no per-tick recompile.
+Adaptive thresholds (Upgrade 1) are **opt-in**: pass ``anneal=True`` with
+``progress`` in ``[0, 1]`` and optional ``threshold_*_start`` endpoints.
+Default ``anneal=False`` keeps the historical static thresholds.
 """
 
 from __future__ import annotations
@@ -180,7 +180,7 @@ def _vstructure_gravity_well(
     return jnp.clip(E_new, 0.0, 1.0)
 
 
-@partial(jax.jit, static_argnames=("k",))
+@partial(jax.jit, static_argnames=("k", "anneal"))
 def step(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -189,36 +189,42 @@ def step(
     threshold_death: float = 0.05,
     threshold_birth: float = 0.15,
     k: int = 2,
+    *,
+    anneal: bool = False,
     progress: float = 1.0,
     threshold_death_start: float = _DEFAULT_DEATH_START,
     threshold_birth_start: float = _DEFAULT_BIRTH_START,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """One Bayesian CA tick (JAX): gravity, V-well, death, elev-orient birth.
 
-    Pure functional; wrapped in ``@jax.jit``. ``k`` is static (shapes).
-    ``progress`` / start thresholds are ordinary traced scalars — no
-    recompile per tick.
+    Pure functional; wrapped in ``@jax.jit``. ``k`` and ``anneal`` are
+    static. Default ``anneal=False`` uses ``threshold_death`` /
+    ``threshold_birth`` unchanged (historical static schedule).
 
     Parameters
     ----------
+    anneal:
+        If ``False`` (default), ignore ``progress`` / ``*_start`` and use
+        the end thresholds as fixed gates. If ``True``, linearly
+        interpolate from ``*_start`` to the end thresholds.
     progress:
         Annealing clock in ``[0, 1]`` (tick 0 → 0.0, final tick → 1.0).
-        Thresholds interpolate linearly from ``*_start`` to
-        ``threshold_death`` / ``threshold_birth``. Defaults keep start
-        equal to end so behavior matches the historical static schedule
-        when callers omit annealing knobs.
+        Only used when ``anneal=True``.
     threshold_death_start, threshold_birth_start:
-        Early-tick endpoints. Raise these above the end thresholds to
-        solidify strong backbones early and allow subtler births late.
+        Early-tick endpoints when ``anneal=True``.
     """
     A = jnp.asarray(A, dtype=jnp.float64)
     E = jnp.asarray(E, dtype=jnp.float64).reshape(-1)
     Cov = jnp.asarray(Cov, dtype=jnp.float64)
     n = A.shape[0]
 
-    # Adaptive thresholds (simulated annealing): high early, low late.
-    death_t = _anneal_threshold(threshold_death_start, threshold_death, progress)
-    birth_t = _anneal_threshold(threshold_birth_start, threshold_birth, progress)
+    if anneal:
+        # Adaptive thresholds: high early, low late (traced scalars).
+        death_t = _anneal_threshold(threshold_death_start, threshold_death, progress)
+        birth_t = _anneal_threshold(threshold_birth_start, threshold_birth, progress)
+    else:
+        death_t = jnp.asarray(threshold_death, dtype=jnp.float64)
+        birth_t = jnp.asarray(threshold_birth, dtype=jnp.float64)
 
     # --- 1. Gravity: downhill-only edges, then elevation drift ---------------
     gravity_ok = E[:, None] > E[None, :]

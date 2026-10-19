@@ -302,21 +302,31 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
         def _step(A, E, Cov, **kwargs):
             import jax.numpy as jnp
 
-            A1, E1 = jax_step(
-                jnp.asarray(A),
-                jnp.asarray(E),
-                jnp.asarray(Cov),
+            anneal = bool(kwargs.get("anneal", False))
+            call_kwargs = dict(
                 learning_rate=kwargs.get("learning_rate", 0.1),
                 threshold_death=kwargs.get("threshold_death", 0.05),
                 threshold_birth=kwargs.get("threshold_birth", 0.15),
                 k=kwargs.get("k", 2),
-                progress=kwargs.get("progress", 1.0),
-                threshold_death_start=kwargs.get(
-                    "threshold_death_start", kwargs.get("threshold_death", 0.05)
-                ),
-                threshold_birth_start=kwargs.get(
-                    "threshold_birth_start", kwargs.get("threshold_birth", 0.15)
-                ),
+                anneal=anneal,
+            )
+            if anneal:
+                call_kwargs.update(
+                    progress=kwargs.get("progress", 1.0),
+                    threshold_death_start=kwargs.get(
+                        "threshold_death_start",
+                        kwargs.get("threshold_death", 0.05),
+                    ),
+                    threshold_birth_start=kwargs.get(
+                        "threshold_birth_start",
+                        kwargs.get("threshold_birth", 0.15),
+                    ),
+                )
+            A1, E1 = jax_step(
+                jnp.asarray(A),
+                jnp.asarray(E),
+                jnp.asarray(Cov),
+                **call_kwargs,
             )
             return np.asarray(A1), np.asarray(E1)
 
@@ -444,7 +454,8 @@ def run_phase2(
     A_init = A.copy()
     E_init = E.copy()
 
-    if anneal and backend == "jax":
+    use_anneal = bool(anneal and backend == "jax")
+    if use_anneal:
         death_start = (
             0.10 if threshold_death_start is None else threshold_death_start
         )
@@ -470,11 +481,13 @@ def run_phase2(
             k=k,
         )
         if backend == "jax":
-            kwargs.update(
-                progress=float(tick) / float(denom),
-                threshold_death_start=death_start,
-                threshold_birth_start=birth_start,
-            )
+            kwargs["anneal"] = use_anneal
+            if use_anneal:
+                kwargs.update(
+                    progress=float(tick) / float(denom),
+                    threshold_death_start=death_start,
+                    threshold_birth_start=birth_start,
+                )
         return kwargs
 
     # Warmup JIT outside the timed window (no-op for NumPy).
