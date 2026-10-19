@@ -286,7 +286,7 @@ def run_jax_ca(
     threshold_death: float = 0.05,
     threshold_birth: float = 0.10,
     k: int = 3,
-    anneal: bool = True,
+    anneal: bool = False,
     threshold_death_start: float = ANNEAL_DEATH_START,
     threshold_birth_start: float = ANNEAL_BIRTH_START,
     threshold_death_end: float | None = None,
@@ -401,7 +401,7 @@ def run_benchmark(
     n_samples: int | None = None,
     golem_iters: int = GOLEM_DEFAULT_KWARGS["num_iter"],
     ca_only: bool = False,
-    anneal: bool = True,
+    anneal: bool = False,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
     bundle = prepare_synthetic_bundle(n=n, seed=seed, n_samples=n_samples)
     want_gpu = _cuda_available()
@@ -463,11 +463,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip PC / GOLEM baselines; time and score Bayesian CA (JAX) only.",
     )
     parser.add_argument(
-        "--no-anneal",
+        "--anneal",
         action="store_true",
         help=(
-            "Disable Upgrade-1 adaptive thresholds; use static "
-            "threshold_death=0.05 / threshold_birth=0.10."
+            "Enable Upgrade-1 adaptive thresholds "
+            f"(death {ANNEAL_DEATH_START:.2f}→{ANNEAL_DEATH_END:.2f}, "
+            f"birth {ANNEAL_BIRTH_START:.2f}→{ANNEAL_BIRTH_END:.2f}). "
+            "Default remains static death=0.05 / birth=0.10 (Phase-6 baseline)."
         ),
     )
     args = parser.parse_args(argv)
@@ -499,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         n_samples=args.samples,
         golem_iters=args.golem_iters,
         ca_only=args.ca_only,
-        anneal=not args.no_anneal,
+        anneal=args.anneal,
     )
     _p(
         f"N={bundle.n}  seed={bundle.seed}  samples={bundle.X.shape[0]}  "
