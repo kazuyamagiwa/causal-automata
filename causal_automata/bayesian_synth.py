@@ -310,6 +310,13 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
                 threshold_death=kwargs.get("threshold_death", 0.05),
                 threshold_birth=kwargs.get("threshold_birth", 0.15),
                 k=kwargs.get("k", 2),
+                progress=kwargs.get("progress", 1.0),
+                threshold_death_start=kwargs.get(
+                    "threshold_death_start", kwargs.get("threshold_death", 0.05)
+                ),
+                threshold_birth_start=kwargs.get(
+                    "threshold_birth_start", kwargs.get("threshold_birth", 0.15)
+                ),
             )
             return np.asarray(A1), np.asarray(E1)
 
@@ -413,6 +420,9 @@ def run_phase2(
     seed: int = 0,
     target_edges: int | None = None,
     backend: str = "numpy",
+    anneal: bool = False,
+    threshold_death_start: float | None = None,
+    threshold_birth_start: float | None = None,
 ) -> Phase2Result:
     """Generate data, init state, loop ``step`` (timed), return artifacts."""
     step_fn, device = _resolve_step(backend)
@@ -434,30 +444,47 @@ def run_phase2(
     A_init = A.copy()
     E_init = E.copy()
 
-    # Warmup JIT outside the timed window (no-op for NumPy).
-    if backend == "jax" and ticks > 0:
-        step_fn(
-            A,
-            E,
-            Cov,
+    if anneal and backend == "jax":
+        death_start = (
+            0.10 if threshold_death_start is None else threshold_death_start
+        )
+        birth_start = (
+            0.20 if threshold_birth_start is None else threshold_birth_start
+        )
+        death_end = threshold_death
+        # Upgrade-1 end birth is 0.05; synth default birth=0.10 maps to that.
+        birth_end = 0.05 if threshold_birth == 0.10 else threshold_birth
+    else:
+        death_start = threshold_death
+        birth_start = threshold_birth
+        death_end = threshold_death
+        birth_end = threshold_birth
+
+    denom = max(ticks - 1, 1)
+
+    def _step_kwargs(tick: int) -> dict:
+        kwargs = dict(
             learning_rate=learning_rate,
-            threshold_death=threshold_death,
-            threshold_birth=threshold_birth,
+            threshold_death=death_end,
+            threshold_birth=birth_end,
             k=k,
         )
+        if backend == "jax":
+            kwargs.update(
+                progress=float(tick) / float(denom),
+                threshold_death_start=death_start,
+                threshold_birth_start=birth_start,
+            )
+        return kwargs
+
+    # Warmup JIT outside the timed window (no-op for NumPy).
+    if backend == "jax" and ticks > 0:
+        step_fn(A, E, Cov, **_step_kwargs(0))
 
     # Time only CA steps (metrics scored after the loop).
     t0 = time.perf_counter()
-    for _ in range(ticks):
-        A, E = step_fn(
-            A,
-            E,
-            Cov,
-            learning_rate=learning_rate,
-            threshold_death=threshold_death,
-            threshold_birth=threshold_birth,
-            k=k,
-        )
+    for tick in range(ticks):
+        A, E = step_fn(A, E, Cov, **_step_kwargs(tick))
     elapsed = time.perf_counter() - t0
 
     metrics_final = edge_metrics(A, A_true)

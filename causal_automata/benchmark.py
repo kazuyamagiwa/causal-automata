@@ -266,6 +266,15 @@ def smoke_golem_init() -> None:
             _p(f"GOLEM(device_type='gpu') without CUDA raises ValueError (expected): {exc}")
 
 
+# Upgrade-1 annealing endpoints (linear in progress ∈ [0, 1]).
+# Early ticks: strict gates (solidify strong backbones).
+# Late ticks: permissive gates (subtle edge formation).
+ANNEAL_DEATH_START = 0.10
+ANNEAL_DEATH_END = 0.05
+ANNEAL_BIRTH_START = 0.20
+ANNEAL_BIRTH_END = 0.05
+
+
 def run_jax_ca(
     Cov: np.ndarray,
     A_init: np.ndarray,
@@ -277,6 +286,11 @@ def run_jax_ca(
     threshold_death: float = 0.05,
     threshold_birth: float = 0.10,
     k: int = 3,
+    anneal: bool = True,
+    threshold_death_start: float = ANNEAL_DEATH_START,
+    threshold_birth_start: float = ANNEAL_BIRTH_START,
+    threshold_death_end: float | None = None,
+    threshold_birth_end: float | None = None,
 ) -> BenchRow:
     try:
         import jax.numpy as jnp
@@ -289,33 +303,67 @@ def run_jax_ca(
             f"Import error: {exc}"
         ) from exc
 
+    if anneal:
+        death_end = (
+            ANNEAL_DEATH_END if threshold_death_end is None else threshold_death_end
+        )
+        birth_end = (
+            ANNEAL_BIRTH_END if threshold_birth_end is None else threshold_birth_end
+        )
+        death_start = threshold_death_start
+        birth_start = threshold_birth_start
+    else:
+        # Static schedule: start == end (progress irrelevant).
+        death_end = threshold_death
+        birth_end = threshold_birth
+        death_start = threshold_death
+        birth_start = threshold_birth
+
     A = jnp.asarray(A_init)
     E = jnp.asarray(E_init)
     Cov_j = jnp.asarray(Cov)
-    # Warmup compile outside the timed window.
+    denom = max(ticks - 1, 1)
+
+    def _progress(tick: int) -> float:
+        return float(tick) / float(denom)
+
+    # Warmup compile outside the timed window (traced scalars; one compile).
     jax_step(
         A,
         E,
         Cov_j,
         learning_rate=learning_rate,
-        threshold_death=threshold_death,
-        threshold_birth=threshold_birth,
+        threshold_death=death_end,
+        threshold_birth=birth_end,
         k=k,
+        progress=_progress(0),
+        threshold_death_start=death_start,
+        threshold_birth_start=birth_start,
     )
     t0 = time.perf_counter()
-    for _ in range(ticks):
+    for tick in range(ticks):
         A, E = jax_step(
             A,
             E,
             Cov_j,
             learning_rate=learning_rate,
-            threshold_death=threshold_death,
-            threshold_birth=threshold_birth,
+            threshold_death=death_end,
+            threshold_birth=birth_end,
             k=k,
+            progress=_progress(tick),
+            threshold_death_start=death_start,
+            threshold_birth_start=birth_start,
         )
     elapsed = time.perf_counter() - t0
     A_pred = _as_binary_adj(np.asarray(A).copy())
     d, s = _score(A_pred, A_true)
+    if anneal:
+        schedule = (
+            f"anneal death {death_start:.2f}→{death_end:.2f} "
+            f"birth {birth_start:.2f}→{birth_end:.2f}"
+        )
+    else:
+        schedule = f"static death={death_end:.2f} birth={birth_end:.2f}"
     return BenchRow(
         algorithm="Bayesian CA (JAX)",
         skeleton_f1=s.f1,
@@ -327,7 +375,7 @@ def run_jax_ca(
         skeleton_tp=s.tp,
         skeleton_fp=s.fp,
         skeleton_fn=s.fn,
-        notes=f"ticks={ticks} k={k} {device_info()}",
+        notes=f"ticks={ticks} k={k} {schedule} {device_info()}",
     )
 
 
@@ -352,13 +400,19 @@ def run_benchmark(
     k: int = 3,
     n_samples: int | None = None,
     golem_iters: int = GOLEM_DEFAULT_KWARGS["num_iter"],
+    ca_only: bool = False,
+    anneal: bool = True,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
     bundle = prepare_synthetic_bundle(n=n, seed=seed, n_samples=n_samples)
     want_gpu = _cuda_available()
 
-    rows = [
-        run_pc(bundle.X, bundle.A_true),
-        run_golem(bundle.X, bundle.A_true, want_gpu=want_gpu, num_iter=golem_iters),
+    rows: list[BenchRow] = []
+    if not ca_only:
+        rows.append(run_pc(bundle.X, bundle.A_true))
+        rows.append(
+            run_golem(bundle.X, bundle.A_true, want_gpu=want_gpu, num_iter=golem_iters)
+        )
+    rows.append(
         run_jax_ca(
             bundle.Cov,
             bundle.A_init,
@@ -366,8 +420,9 @@ def run_benchmark(
             bundle.A_true,
             ticks=ticks,
             k=k,
-        ),
-    ]
+            anneal=anneal,
+        )
+    )
     return rows, bundle
 
 
@@ -402,15 +457,30 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Device checks + GOLEM import/init only (no full learn / no timings).",
     )
+    parser.add_argument(
+        "--ca-only",
+        action="store_true",
+        help="Skip PC / GOLEM baselines; time and score Bayesian CA (JAX) only.",
+    )
+    parser.add_argument(
+        "--no-anneal",
+        action="store_true",
+        help=(
+            "Disable Upgrade-1 adaptive thresholds; use static "
+            "threshold_death=0.05 / threshold_birth=0.10."
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.getLogger("castle").setLevel(logging.WARNING)
     logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
 
     print_device_checks()
-    _require_gcastle()
+    if not args.ca_only:
+        _require_gcastle()
 
     if args.smoke:
+        _require_gcastle()
         smoke_golem_init()
         _p()
         _p(
@@ -428,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
         k=args.k,
         n_samples=args.samples,
         golem_iters=args.golem_iters,
+        ca_only=args.ca_only,
+        anneal=not args.no_anneal,
     )
     _p(
         f"N={bundle.n}  seed={bundle.seed}  samples={bundle.X.shape[0]}  "
