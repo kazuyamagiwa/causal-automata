@@ -14,6 +14,10 @@ Smoke::
 
     from causal_automata.jax_core import step, device_info
     A1, E1 = step(A, E, Cov)  # jit-compiled on first call
+
+Adaptive thresholds (Upgrade 1) are **opt-in**: pass ``anneal=True`` with
+``progress`` in ``[0, 1]`` and optional ``threshold_*_start`` endpoints.
+Default ``anneal=False`` keeps the historical static thresholds.
 """
 
 from __future__ import annotations
@@ -27,6 +31,11 @@ import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
 _RIDGE = 1e-8
+
+# Default linear annealing endpoints (progress 0 → 1). When start == end,
+# thresholds are static regardless of ``progress`` (backward compatible).
+_DEFAULT_DEATH_START = 0.05
+_DEFAULT_BIRTH_START = 0.15
 
 
 def device_info() -> str:
@@ -132,6 +141,14 @@ def _empty_z_partial_corr(Cov: jnp.ndarray) -> jnp.ndarray:
     return _pairwise_partial_corr(Cov, z, valid, k=0)
 
 
+def _anneal_threshold(start: float, end: float, progress: float) -> jnp.ndarray:
+    """Linear interpolate ``start → end`` for ``progress ∈ [0, 1]``."""
+    p = jnp.clip(jnp.asarray(progress, dtype=jnp.float64), 0.0, 1.0)
+    start_a = jnp.asarray(start, dtype=jnp.float64)
+    end_a = jnp.asarray(end, dtype=jnp.float64)
+    return start_a + p * (end_a - start_a)
+
+
 def _vstructure_gravity_well(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -163,7 +180,7 @@ def _vstructure_gravity_well(
     return jnp.clip(E_new, 0.0, 1.0)
 
 
-@partial(jax.jit, static_argnames=("k",))
+@partial(jax.jit, static_argnames=("k", "anneal"))
 def step(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -172,15 +189,42 @@ def step(
     threshold_death: float = 0.05,
     threshold_birth: float = 0.15,
     k: int = 2,
+    *,
+    anneal: bool = False,
+    progress: float = 1.0,
+    threshold_death_start: float = _DEFAULT_DEATH_START,
+    threshold_birth_start: float = _DEFAULT_BIRTH_START,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """One Bayesian CA tick (JAX): gravity, V-well, death, elev-orient birth.
 
-    Pure functional; wrapped in ``@jax.jit``. ``k`` is static (shapes).
+    Pure functional; wrapped in ``@jax.jit``. ``k`` and ``anneal`` are
+    static. Default ``anneal=False`` uses ``threshold_death`` /
+    ``threshold_birth`` unchanged (historical static schedule).
+
+    Parameters
+    ----------
+    anneal:
+        If ``False`` (default), ignore ``progress`` / ``*_start`` and use
+        the end thresholds as fixed gates. If ``True``, linearly
+        interpolate from ``*_start`` to the end thresholds.
+    progress:
+        Annealing clock in ``[0, 1]`` (tick 0 → 0.0, final tick → 1.0).
+        Only used when ``anneal=True``.
+    threshold_death_start, threshold_birth_start:
+        Early-tick endpoints when ``anneal=True``.
     """
     A = jnp.asarray(A, dtype=jnp.float64)
     E = jnp.asarray(E, dtype=jnp.float64).reshape(-1)
     Cov = jnp.asarray(Cov, dtype=jnp.float64)
     n = A.shape[0]
+
+    if anneal:
+        # Adaptive thresholds: high early, low late (traced scalars).
+        death_t = _anneal_threshold(threshold_death_start, threshold_death, progress)
+        birth_t = _anneal_threshold(threshold_birth_start, threshold_birth, progress)
+    else:
+        death_t = jnp.asarray(threshold_death, dtype=jnp.float64)
+        birth_t = jnp.asarray(threshold_birth, dtype=jnp.float64)
 
     # --- 1. Gravity: downhill-only edges, then elevation drift ---------------
     gravity_ok = E[:, None] > E[None, :]
@@ -197,7 +241,7 @@ def step(
     E = jnp.clip(E, 0.0, 1.0)
 
     # --- 2. V-structure gravity well -----------------------------------------
-    E = _vstructure_gravity_well(A, E, Cov, learning_rate, threshold_death)
+    E = _vstructure_gravity_well(A, E, Cov, learning_rate, death_t)
 
     U = _undirected_neighbors(A)
 
@@ -207,7 +251,7 @@ def step(
 
     # --- 3. Death ------------------------------------------------------------
     existing = A > 0
-    kill = existing & (jnp.abs(rho) < threshold_death)
+    kill = existing & (jnp.abs(rho) < death_t)
     A = jnp.where(kill, 0.0, A)
     U = _undirected_neighbors(A)
     Z, valid = _pairwise_topk_Z(U, Cov, k)
@@ -218,7 +262,7 @@ def step(
     undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
     # Evaluate unordered pairs once via upper triangle, then orient.
     candidates = jnp.triu(undirected_absent, k=1)
-    strong = candidates & (jnp.abs(rho) > threshold_birth)
+    strong = candidates & (jnp.abs(rho) > birth_t)
     forward = strong & (E[:, None] > E[None, :])
     backward = strong & (E[None, :] > E[:, None])
     # backward[i,j] means E[j] > E[i] on upper-tri (i<j) ⇒ birth j→i
