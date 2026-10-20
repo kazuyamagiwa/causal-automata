@@ -343,6 +343,19 @@ def _default_edge_prob(n: int) -> float:
     return float(target_init / (n * (n - 1) / 2))
 
 
+def default_conditioning_k(n: int) -> int:
+    """Scale-aware default conditioning-set size (Upgrade 2).
+
+    On the N=100 seed=0 SEM, Directed F1 jumps from 0.483 (``k=3``) to
+    0.619 (``k=5``) then plateaus through ``k=8`` (no collider-trap
+    collapse on that graph). Use ``k=5`` for ``n >= 100``; keep the
+    historical ``k=3`` for smaller graphs.
+    """
+    if n >= 100:
+        return 5
+    return 3
+
+
 def _default_samples(n: int) -> int:
     return 5000 if n <= 10 else max(5000, 200 * n)
 
@@ -426,7 +439,7 @@ def run_phase2(
     learning_rate: float = 0.1,
     threshold_death: float = 0.05,
     threshold_birth: float = 0.10,
-    k: int = 3,
+    k: int | None = None,
     seed: int = 0,
     target_edges: int | None = None,
     backend: str = "numpy",
@@ -435,6 +448,8 @@ def run_phase2(
     threshold_birth_start: float | None = None,
 ) -> Phase2Result:
     """Generate data, init state, loop ``step`` (timed), return artifacts."""
+    if k is None:
+        k = default_conditioning_k(n)
     step_fn, device = _resolve_step(backend)
     bundle = prepare_synthetic_bundle(
         n=n,
@@ -604,11 +619,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--k",
         type=int,
-        default=3,
+        default=None,
         help=(
             "Conditioning-set size for death/birth partial correlations "
-            "(default 3; jax_core.step API default remains 2). "
-            "JAX path uses static k with (2+k)×(2+k) batched inversions."
+            "(default: 3 for n<100, 5 for n>=100; jax_core.step API default "
+            "remains 2). JAX path uses static k with (2+k)×(2+k) batched "
+            "inversions."
         ),
     )
     parser.add_argument(

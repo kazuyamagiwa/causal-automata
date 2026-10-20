@@ -39,6 +39,7 @@ import numpy as np
 
 from causal_automata.bayesian_synth import (
     SyntheticBundle,
+    default_conditioning_k,
     edge_metrics,
     prepare_synthetic_bundle,
     skeleton_metrics,
@@ -427,13 +428,15 @@ def run_benchmark(
     n: int = 100,
     seed: int = 0,
     ticks: int = 100,
-    k: int = 3,
+    k: int | None = None,
     k_sweep: list[int] | None = None,
     n_samples: int | None = None,
     golem_iters: int = GOLEM_DEFAULT_KWARGS["num_iter"],
     ca_only: bool = False,
     anneal: bool = False,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
+    if k is None:
+        k = default_conditioning_k(n)
     bundle = prepare_synthetic_bundle(n=n, seed=seed, n_samples=n_samples)
     want_gpu = _cuda_available()
 
@@ -474,9 +477,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--k",
         type=int,
-        default=3,
+        default=None,
         help=(
-            "Conditioning-set size for CA partial correlations (default 3). "
+            "Conditioning-set size for CA partial correlations "
+            "(default: 3 for n<100, 5 for n>=100 — Upgrade 2). "
             "JIT-static; batched inv blocks are (2+k)×(2+k)."
         ),
     )
@@ -546,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
         _p("  python -m causal_automata.benchmark --n 100")
         return 0
 
-    if args.k < 0:
+    if args.k is not None and args.k < 0:
         raise SystemExit(f"--k must be >= 0, got {args.k}")
 
     rows, bundle = run_benchmark(
