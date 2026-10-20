@@ -307,8 +307,8 @@ def run_jax_ca(
     threshold_birth_end: float | None = None,
     label_k: bool = False,
     fuzzy: bool = False,
-    birth_rate: float = 0.25,
-    death_rate: float = 0.25,
+    birth_rate: float = 0.5,
+    death_rate: float = 0.1,
     binarize_threshold: float = FUZZY_BINARIZE,
     algorithm: str | None = None,
 ) -> BenchRow:
@@ -470,8 +470,8 @@ def run_benchmark(
     anneal: bool = False,
     fuzzy: bool = False,
     compare_fuzzy: bool = False,
-    birth_rate: float = 0.25,
-    death_rate: float = 0.25,
+    birth_rate: float = 0.5,
+    death_rate: float = 0.1,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
     if k is None:
         k = default_conditioning_k(n)
@@ -616,14 +616,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--birth-rate",
         type=float,
-        default=0.25,
-        help="Fuzzy birth increment (default 0.25; only with --fuzzy).",
+        default=0.5,
+        help="Fuzzy birth increment (default 0.5; only with --fuzzy).",
     )
     parser.add_argument(
         "--death-rate",
         type=float,
-        default=0.25,
-        help="Fuzzy death decay (default 0.25; only with --fuzzy).",
+        default=0.1,
+        help="Fuzzy death decay (default 0.1; only with --fuzzy).",
     )
     args = parser.parse_args(argv)
 

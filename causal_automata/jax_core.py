@@ -43,8 +43,9 @@ _DEFAULT_DEATH_START = 0.05
 _DEFAULT_BIRTH_START = 0.15
 
 # Upgrade-3 soft birth / death step sizes (used only when ``fuzzy=True``).
-_DEFAULT_BIRTH_RATE = 0.25
-_DEFAULT_DEATH_RATE = 0.25
+# Tuned on N=100 seed=0 (k=5): slower death preserves weak true edges longer.
+_DEFAULT_BIRTH_RATE = 0.5
+_DEFAULT_DEATH_RATE = 0.1
 _DEFAULT_BINARIZE = 0.5
 
 
