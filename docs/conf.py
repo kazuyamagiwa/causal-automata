@@ -13,8 +13,8 @@ sys.path.insert(0, str(ROOT))
 project = "causal-automata"
 author = "Masakazu Yamagiwa"
 copyright = f"{datetime.now(timezone.utc).year}, {author}"
-release = "0.1.1"
-version = "0.1.1"
+release = "0.2.0"
+version = "0.2.0"
 
 extensions = [
     "sphinx.ext.autodoc",

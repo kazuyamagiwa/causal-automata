@@ -1,6 +1,6 @@
 [project]
 name = "causal-automata"
-version = "0.1.2"
+version = "0.2.0"
 description = "A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery."
 readme = "README.md"
 authors = [

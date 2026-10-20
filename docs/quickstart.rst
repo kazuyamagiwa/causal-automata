@@ -11,18 +11,38 @@ prototype as :func:`causal_automata.numpy_step`.
 .. code-block:: python
 
    import numpy as np
-   from causal_automata import step, warmup
+   from causal_automata import step, warmup, default_conditioning_k, __version__
    from causal_automata.bayesian_synth import prepare_synthetic_bundle
 
-   print(warmup())  # compile + device string
+   print(__version__, warmup())  # e.g. 0.2.0 + device string
 
-   bundle = prepare_synthetic_bundle(n=10, seed=0)
+   n = 100
+   bundle = prepare_synthetic_bundle(n=n, seed=0)
    A, E, Cov = bundle.A_init, bundle.E_init, bundle.Cov
+   k = default_conditioning_k(n)  # 3 if N≤50, 5 if N>50
 
    for _ in range(100):
-       A, E = step(A, E, Cov, k=3)
+       A, E = step(A, E, Cov, k=k, threshold_birth=0.10)
 
    print("Predicted edges:", int((A > 0).sum()))
+
+Maximum Accuracy Mode (2-hop gravity)
+-------------------------------------
+
+Pass ``multihop=True`` (CLI: ``--multihop``) so elevation drift also sees
+neighbors two hops away via :math:`A@A`::
+
+   for _ in range(100):
+       A, E = step(
+           A, E, Cov,
+           k=k,
+           threshold_birth=0.10,
+           multihop=True,
+           hop_discount=1.0,
+       )
+
+On the default N=100 SEM this lifts Directed F1 from **0.619** (1-hop)
+to **0.696** with flat wall time. See :doc:`benchmarks`.
 
 State variables
 ---------------
@@ -30,8 +50,9 @@ State variables
 =========== ===============================================================
 Symbol      Meaning
 =========== ===============================================================
-``A``       Binary adjacency :math:`(N, N)`. ``A[i, j] = 1`` means
-            directed edge :math:`i \to j`.
+``A``       Adjacency :math:`(N, N)`. Binary by default; with
+            ``fuzzy=True`` continuous weights in :math:`[0, 1]`
+            (binarize after the loop, e.g. ``A > 0.5``).
 ``E``       Node elevations :math:`(N,)` in :math:`[0, 1]`. Arrows may
             only point *downhill* (:math:`E_{\mathrm{parent}} >
             E_{\mathrm{child}}`), which enforces acyclicity.
@@ -40,8 +61,9 @@ Symbol      Meaning
 
 Each call to ``step`` applies, in order:
 
-1. **Gravity** — drop uphill edges; drift elevations toward the midpoint of
-   parent and child means.
+1. **Gravity** — drop (or soft-clear) uphill edges; drift elevations toward
+   the midpoint of parent and child means. With ``multihop=True``, also
+   pull toward 2-hop means from :math:`A@A`.
 2. **V-well** — sink elevations of collider nodes detected from marginally
    independent pairs that share neighbors.
 3. **Death / birth** — prune weak and spawn strong edges using partial
@@ -60,8 +82,10 @@ NumPy vs JAX
    A1, E1 = numpy_step(A, E, Cov, threshold_birth=0.10, k=3)
    A2, E2 = jax_step(A, E, Cov, threshold_birth=0.10, k=3)
 
-Both backends share the same physics. Prefer JAX when ``N`` is large or a
-GPU is available; prefer NumPy for debugging and environments without JAX.
+Both backends share the same core physics. Prefer JAX when ``N`` is large
+or a GPU / MPS device is available; prefer NumPy for debugging and
+environments without JAX. Upgrade flags (``multihop``, ``fuzzy``,
+``anneal``) are implemented on the JAX path.
 
 Synthetic end-to-end harness
 ----------------------------
@@ -70,7 +94,10 @@ Synthetic end-to-end harness
 
    python -m causal_automata.bayesian_synth --n 10
    python -m causal_automata.bayesian_synth --n 50 --backend jax
-   python -m causal_automata.bayesian_synth --n 100 --seeds 5
+   python -m causal_automata.bayesian_synth --n 100 --backend jax
+
+   # Benchmark Maximum Accuracy Mode
+   python -m causal_automata.benchmark --n 100 --ca-only --k 5 --multihop
 
 See :doc:`cli` for the full flag list and :doc:`benchmarks` for comparison
 against gCastle PC and GOLEM.

@@ -88,11 +88,14 @@ physics adapted for batched partial correlation:
    (equal elevation → no-op). Re-apply downhill clear after sinks.
 
 Default API thresholds are ``threshold_death=0.05``,
-``threshold_birth=0.15``, ``k=2``, ``learning_rate=0.1``. The synthetic
-CLI often uses ``threshold_birth=0.10`` and ``k=3``.
+``threshold_birth=0.15``, ``k=2``, ``learning_rate=0.1``. The synthetic /
+benchmark CLIs typically use ``threshold_birth=0.10`` and a
+**scale-aware** ``k`` (``3`` if :math:`N\le 50`, ``5`` if :math:`N>50`).
+Optional ``multihop=True`` adds discounted 2-hop elevation pull from
+:math:`A@A` (Maximum Accuracy Mode).
 
-GPU matrix computation
-----------------------
+GPU / accelerator matrix computation
+------------------------------------
 
 For continuous linear-Gaussian data, CMI relates to partial correlation.
 The engine precomputes a global covariance and, each tick, forms
@@ -103,9 +106,9 @@ yields precision matrices whose off-diagonals give :math:`\rho`.
 Component     Structure                               JAX / NumPy operation
 ============= ======================================= =====================================
 State         :math:`N \times N`                      Array update / ``jax.lax``-friendly
-Gravity       Downhill mask                           Element-wise multiply / ``where``
+Gravity       Downhill mask + optional :math:`A@A`    Element-wise / ``matmul``
 V-wells       Pair + shared-neighbor masks            Boolean reductions; elevation sinks
-Death / birth Ranked :math:`Z`, :math:`\rho`          Batched ``linalg.inv``
+Death / birth Ranked :math:`Z`, :math:`\rho`          Batched ``linalg.inv`` ``(2+k)``
 DAG law       Elevations                              Hard downhill constraint
 ============= ======================================= =====================================
 

@@ -1,32 +1,28 @@
 """JAX port of the Bayesian CA ``step`` (functional + ``@jax.jit``).
 
-Cross-platform: uses only ``jax`` / ``jax.numpy``. Accelerator selection is
-left to the installed JAX wheel (CPU, CUDA, or Metal/MPS) — no hardcoded
-backend or Mac-specific branches in this module.
+Cross-platform module using only ``jax`` / ``jax.numpy``. Accelerator
+selection is left to the installed JAX wheel (CPU, CUDA, or Metal/MPS) —
+no hardcoded backend branches.
 
-Install (pick one accelerator wheel for your machine)::
+Install (pick one accelerator wheel)::
 
-    uv sync --extra jax          # CPU jax/jaxlib
-    # Apple Silicon:  pip/uv install jax-mps
-    # NVIDIA / Colab: pip/uv install "jax[cuda]"  (see JAX install docs)
+    uv pip install "causal-automata[jax]"   # CPU jax/jaxlib
+    # Apple Silicon Metal/MPS: install a Metal-enabled JAX wheel (e.g. jax-mps)
+    # NVIDIA / Colab: pip install "causal-automata[cuda]"  (see JAX docs)
 
 Smoke::
 
-    from causal_automata.jax_core import step, device_info
+    from causal_automata.jax_core import step, device_info, warmup
+    print(warmup())
     A1, E1 = step(A, E, Cov)  # jit-compiled on first call
 
-Adaptive thresholds (Upgrade 1) are **opt-in**: pass ``anneal=True`` with
-``progress`` in ``[0, 1]`` and optional ``threshold_*_start`` endpoints.
-Default ``anneal=False`` keeps the historical static thresholds.
+Upgrade flags (all opt-in; defaults preserve the binary 1-hop CA):
 
-Fuzzy edges (Upgrade 3) are **opt-in**: pass ``fuzzy=True`` so ``A`` stays
-continuous in ``[0, 1]`` across ticks (soft birth/death). Default
-``fuzzy=False`` keeps the binary CA. Callers should binarize only after the
-final tick (e.g. ``A > 0.5``).
-
-Multi-hop vision (Upgrade 4) is **opt-in**: pass ``multihop=True`` so
-elevation drift also sees 2-hop neighbors via ``A @ A``, weighted by
-``hop_discount`` (default ``1.0``).
+* **Upgrade 1** — ``anneal=True`` with ``progress`` in ``[0, 1]``.
+* **Upgrade 3** — ``fuzzy=True`` keeps continuous ``A ∈ [0, 1]``; binarize
+  after the final tick (e.g. :func:`binarize`).
+* **Upgrade 4** — ``multihop=True`` adds 2-hop elevation pull via ``A @ A``
+  (Maximum Accuracy Mode; ``hop_discount=1.0`` by default).
 """
 
 from __future__ import annotations
@@ -286,6 +282,19 @@ def step(
 
     Parameters
     ----------
+    A:
+        Adjacency ``(N, N)``. Binary by default; continuous in ``[0, 1]``
+        when ``fuzzy=True``.
+    E:
+        Node elevations ``(N,)`` in ``[0, 1]``.
+    Cov:
+        Empirical covariance ``(N, N)`` of the observations.
+    learning_rate:
+        Elevation drift step size toward the gravity target.
+    threshold_death:
+        Kill / decay edges with ``|rho|`` below this value (end of anneal).
+    threshold_birth:
+        Birth / reinforce edges with ``|rho|`` above this value (end of anneal).
     k:
         Conditioning-set size for death/birth partial correlations (static).
         Batched inversions use ``(2+k)×(2+k)`` blocks; raise via the
@@ -309,9 +318,15 @@ def step(
         Soft update sizes when ``fuzzy=True`` (ignored in binary mode).
     multihop:
         If ``True``, elevation drift also pulls toward 2-hop parent/child
-        means from ``A @ A``, scaled by ``hop_discount`` (Upgrade 4).
+        means from ``A @ A``, scaled by ``hop_discount`` (Upgrade 4 /
+        Maximum Accuracy Mode).
     hop_discount:
         Weight on the 2-hop elevation target when ``multihop=True``.
+
+    Returns
+    -------
+    A_new, E_new
+        Updated adjacency and elevations (pure; inputs are not mutated).
     """
     A = jnp.asarray(A, dtype=jnp.float64)
     E = jnp.asarray(E, dtype=jnp.float64).reshape(-1)
