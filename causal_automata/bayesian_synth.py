@@ -605,7 +605,11 @@ def main(argv: list[str] | None = None) -> int:
         "--k",
         type=int,
         default=3,
-        help="Conditioning-set cap (Phase-2 default 3; step() API default remains 2).",
+        help=(
+            "Conditioning-set size for death/birth partial correlations "
+            "(default 3; jax_core.step API default remains 2). "
+            "JAX path uses static k with (2+k)×(2+k) batched inversions."
+        ),
     )
     parser.add_argument(
         "--target-edges",

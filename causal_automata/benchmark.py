@@ -21,6 +21,9 @@ Run::
     uv run python -m causal_automata.benchmark --n 50 --ca-only
     uv run python -m causal_automata.benchmark --n 50 --ca-only --anneal
 
+    # Upgrade 2 — conditioning-set sweep (same SEM bundle, several k):
+    uv run python -m causal_automata.benchmark --n 100 --ca-only --k-sweep 3,4,5
+
     # CPU / no-GPU smoke (import + GOLEM init only; no invented GPU timings):
     uv run python -m causal_automata.benchmark --smoke
 """
@@ -295,6 +298,7 @@ def run_jax_ca(
     threshold_birth_start: float = ANNEAL_BIRTH_START,
     threshold_death_end: float | None = None,
     threshold_birth_end: float | None = None,
+    label_k: bool = False,
 ) -> BenchRow:
     try:
         import jax.numpy as jnp
@@ -370,8 +374,9 @@ def run_jax_ca(
     elapsed = time.perf_counter() - t0
     A_pred = _as_binary_adj(np.asarray(A).copy())
     d, s = _score(A_pred, A_true)
+    algo = f"Bayesian CA (JAX, k={k})" if label_k else "Bayesian CA (JAX)"
     return BenchRow(
-        algorithm="Bayesian CA (JAX)",
+        algorithm=algo,
         skeleton_f1=s.f1,
         directed_f1=d.f1,
         wall_time_s=elapsed,
@@ -398,12 +403,32 @@ def markdown_table(rows: list[BenchRow]) -> str:
     return "\n".join(lines)
 
 
+def _parse_k_sweep(spec: str) -> list[int]:
+    """Parse ``'3,4,5'`` into a list of non-negative ints (order preserved)."""
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError("--k-sweep requires at least one integer")
+    vals: list[int] = []
+    for p in parts:
+        try:
+            v = int(p)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"invalid --k-sweep entry {p!r}; expected integers"
+            ) from exc
+        if v < 0:
+            raise argparse.ArgumentTypeError(f"k must be >= 0, got {v}")
+        vals.append(v)
+    return vals
+
+
 def run_benchmark(
     *,
     n: int = 100,
     seed: int = 0,
     ticks: int = 100,
     k: int = 3,
+    k_sweep: list[int] | None = None,
     n_samples: int | None = None,
     golem_iters: int = GOLEM_DEFAULT_KWARGS["num_iter"],
     ca_only: bool = False,
@@ -418,17 +443,21 @@ def run_benchmark(
         rows.append(
             run_golem(bundle.X, bundle.A_true, want_gpu=want_gpu, num_iter=golem_iters)
         )
-    rows.append(
-        run_jax_ca(
-            bundle.Cov,
-            bundle.A_init,
-            bundle.E_init,
-            bundle.A_true,
-            ticks=ticks,
-            k=k,
-            anneal=anneal,
+    ks = list(k_sweep) if k_sweep else [k]
+    label_k = len(ks) > 1
+    for ki in ks:
+        rows.append(
+            run_jax_ca(
+                bundle.Cov,
+                bundle.A_init,
+                bundle.E_init,
+                bundle.A_true,
+                ticks=ticks,
+                k=ki,
+                anneal=anneal,
+                label_k=label_k,
+            )
         )
-    )
     return rows, bundle
 
 
@@ -442,7 +471,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ticks", type=int, default=100)
-    parser.add_argument("--k", type=int, default=3)
+    parser.add_argument(
+        "--k",
+        type=int,
+        default=3,
+        help=(
+            "Conditioning-set size for CA partial correlations (default 3). "
+            "JIT-static; batched inv blocks are (2+k)×(2+k)."
+        ),
+    )
+    parser.add_argument(
+        "--k-sweep",
+        type=_parse_k_sweep,
+        default=None,
+        metavar="Ks",
+        help=(
+            "Comma-separated conditioning sizes to compare on one SEM bundle "
+            "(e.g. 3,4,5). Overrides --k for the CA row(s); labels each k."
+        ),
+    )
     parser.add_argument(
         "--samples",
         type=int,
@@ -499,11 +546,15 @@ def main(argv: list[str] | None = None) -> int:
         _p("  python -m causal_automata.benchmark --n 100")
         return 0
 
+    if args.k < 0:
+        raise SystemExit(f"--k must be >= 0, got {args.k}")
+
     rows, bundle = run_benchmark(
         n=args.n,
         seed=args.seed,
         ticks=args.ticks,
         k=args.k,
+        k_sweep=args.k_sweep,
         n_samples=args.samples,
         golem_iters=args.golem_iters,
         ca_only=args.ca_only,
