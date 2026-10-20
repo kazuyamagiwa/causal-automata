@@ -27,6 +27,9 @@ Run::
     # Upgrade 3 — binary vs fuzzy continuous edges (same SEM, default k):
     uv run python -m causal_automata.benchmark --n 100 --ca-only --compare-fuzzy
 
+    # Upgrade 4 — 1-hop vs 2-hop gravity (binary, default k):
+    uv run python -m causal_automata.benchmark --n 100 --ca-only --k 5 --compare-multihop
+
     # CPU / no-GPU smoke (import + GOLEM init only; no invented GPU timings):
     uv run python -m causal_automata.benchmark --smoke
 """
@@ -310,6 +313,8 @@ def run_jax_ca(
     birth_rate: float = 0.5,
     death_rate: float = 0.1,
     binarize_threshold: float = FUZZY_BINARIZE,
+    multihop: bool = False,
+    hop_discount: float = 1.0,
     algorithm: str | None = None,
 ) -> BenchRow:
     try:
@@ -354,6 +359,8 @@ def run_jax_ca(
                 fuzzy=fuzzy,
                 birth_rate=birth_rate,
                 death_rate=death_rate,
+                multihop=multihop,
+                hop_discount=hop_discount,
             )
 
         schedule = (
@@ -378,6 +385,8 @@ def run_jax_ca(
                 fuzzy=fuzzy,
                 birth_rate=birth_rate,
                 death_rate=death_rate,
+                multihop=multihop,
+                hop_discount=hop_discount,
             )
 
         schedule = f"static death={death_end:.2f} birth={birth_end:.2f}"
@@ -387,6 +396,9 @@ def run_jax_ca(
         f"binarize>{binarize_threshold:.2f}"
         if fuzzy
         else "binary"
+    )
+    hop_mode = (
+        f"multihop discount={hop_discount:.2f}" if multihop else "1-hop"
     )
 
     # Warmup compile outside the timed window (discard result; re-init state).
@@ -404,10 +416,14 @@ def run_jax_ca(
         A_pred = _as_binary_adj(A_np)
     d, s = _score(A_pred, A_true)
     if algorithm is None:
-        if label_k:
-            algorithm = f"Bayesian CA (JAX, k={k})"
-        elif fuzzy:
-            algorithm = f"Bayesian CA (JAX, fuzzy, k={k})"
+        tags = []
+        if fuzzy:
+            tags.append("fuzzy")
+        if multihop:
+            tags.append("multihop")
+        if label_k or tags:
+            tag_s = (", ".join(tags) + ", " if tags else "") + f"k={k}"
+            algorithm = f"Bayesian CA (JAX, {tag_s})"
         else:
             algorithm = "Bayesian CA (JAX)"
     return BenchRow(
@@ -421,7 +437,10 @@ def run_jax_ca(
         skeleton_tp=s.tp,
         skeleton_fp=s.fp,
         skeleton_fn=s.fn,
-        notes=f"ticks={ticks} k={k} {edge_mode} {schedule} {device_info()}",
+        notes=(
+            f"ticks={ticks} k={k} {edge_mode} {hop_mode} {schedule} "
+            f"{device_info()}"
+        ),
     )
 
 
@@ -472,6 +491,9 @@ def run_benchmark(
     compare_fuzzy: bool = False,
     birth_rate: float = 0.5,
     death_rate: float = 0.1,
+    multihop: bool = False,
+    compare_multihop: bool = False,
+    hop_discount: float = 1.0,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
     if k is None:
         k = default_conditioning_k(n)
@@ -485,7 +507,7 @@ def run_benchmark(
             run_golem(bundle.X, bundle.A_true, want_gpu=want_gpu, num_iter=golem_iters)
         )
     ks = list(k_sweep) if k_sweep else [k]
-    label_k = len(ks) > 1 and not compare_fuzzy
+    label_k = len(ks) > 1 and not compare_fuzzy and not compare_multihop
     for ki in ks:
         if compare_fuzzy:
             rows.append(
@@ -498,6 +520,8 @@ def run_benchmark(
                     k=ki,
                     anneal=anneal,
                     fuzzy=False,
+                    multihop=multihop,
+                    hop_discount=hop_discount,
                     algorithm=f"Bayesian CA (JAX, binary, k={ki})",
                 )
             )
@@ -513,7 +537,43 @@ def run_benchmark(
                     fuzzy=True,
                     birth_rate=birth_rate,
                     death_rate=death_rate,
+                    multihop=multihop,
+                    hop_discount=hop_discount,
                     algorithm=f"Bayesian CA (JAX, fuzzy, k={ki})",
+                )
+            )
+        elif compare_multihop:
+            rows.append(
+                run_jax_ca(
+                    bundle.Cov,
+                    bundle.A_init,
+                    bundle.E_init,
+                    bundle.A_true,
+                    ticks=ticks,
+                    k=ki,
+                    anneal=anneal,
+                    fuzzy=fuzzy,
+                    birth_rate=birth_rate,
+                    death_rate=death_rate,
+                    multihop=False,
+                    algorithm=f"Bayesian CA (JAX, 1-hop, k={ki})",
+                )
+            )
+            rows.append(
+                run_jax_ca(
+                    bundle.Cov,
+                    bundle.A_init,
+                    bundle.E_init,
+                    bundle.A_true,
+                    ticks=ticks,
+                    k=ki,
+                    anneal=anneal,
+                    fuzzy=fuzzy,
+                    birth_rate=birth_rate,
+                    death_rate=death_rate,
+                    multihop=True,
+                    hop_discount=hop_discount,
+                    algorithm=f"Bayesian CA (JAX, multihop, k={ki})",
                 )
             )
         else:
@@ -530,6 +590,8 @@ def run_benchmark(
                     fuzzy=fuzzy,
                     birth_rate=birth_rate,
                     death_rate=death_rate,
+                    multihop=multihop,
+                    hop_discount=hop_discount,
                 )
             )
     return rows, bundle
@@ -625,6 +687,25 @@ def main(argv: list[str] | None = None) -> int:
         default=0.1,
         help="Fuzzy death decay (default 0.1; only with --fuzzy).",
     )
+    parser.add_argument(
+        "--multihop",
+        action="store_true",
+        help=(
+            "Enable Upgrade-4 2-hop gravity: elevation drift also uses A@A "
+            "neighbors, scaled by --hop-discount (default 1.0)."
+        ),
+    )
+    parser.add_argument(
+        "--compare-multihop",
+        action="store_true",
+        help="Run 1-hop and multihop CA side-by-side on the same SEM bundle.",
+    )
+    parser.add_argument(
+        "--hop-discount",
+        type=float,
+        default=1.0,
+        help="Weight on 2-hop elevation pull (default 1.0; with --multihop).",
+    )
     args = parser.parse_args(argv)
 
     logging.getLogger("castle").setLevel(logging.WARNING)
@@ -663,6 +744,9 @@ def main(argv: list[str] | None = None) -> int:
         compare_fuzzy=args.compare_fuzzy,
         birth_rate=args.birth_rate,
         death_rate=args.death_rate,
+        multihop=args.multihop,
+        compare_multihop=args.compare_multihop,
+        hop_discount=args.hop_discount,
     )
     _p(
         f"N={bundle.n}  seed={bundle.seed}  samples={bundle.X.shape[0]}  "

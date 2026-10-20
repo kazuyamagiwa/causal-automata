@@ -23,6 +23,10 @@ Fuzzy edges (Upgrade 3) are **opt-in**: pass ``fuzzy=True`` so ``A`` stays
 continuous in ``[0, 1]`` across ticks (soft birth/death). Default
 ``fuzzy=False`` keeps the binary CA. Callers should binarize only after the
 final tick (e.g. ``A > 0.5``).
+
+Multi-hop vision (Upgrade 4) is **opt-in**: pass ``multihop=True`` so
+elevation drift also sees 2-hop neighbors via ``A @ A``, weighted by
+``hop_discount`` (default ``1.0``).
 """
 
 from __future__ import annotations
@@ -47,6 +51,10 @@ _DEFAULT_BIRTH_START = 0.15
 _DEFAULT_BIRTH_RATE = 0.5
 _DEFAULT_DEATH_RATE = 0.1
 _DEFAULT_BINARIZE = 0.5
+
+# Upgrade-4 2-hop gravity discount (used only when ``multihop=True``).
+# N=100 seed=0 k=5: discount=1.0 lifts Directed F1 0.619 → 0.696.
+_DEFAULT_HOP_DISCOUNT = 1.0
 
 
 def device_info() -> str:
@@ -173,6 +181,50 @@ def _anneal_threshold(start: float, end: float, progress: float) -> jnp.ndarray:
     return start_a + p * (end_a - start_a)
 
 
+def _mean_neighbor_elevations(W: jnp.ndarray, E: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Parent/child mean elevations under directed weight matrix ``W``."""
+    parent_count = W.sum(axis=0)
+    child_count = W.sum(axis=1)
+    parent_sum = W.T @ E
+    child_sum = W @ E
+    mean_parents = jnp.where(parent_count > 0, parent_sum / parent_count, E)
+    mean_children = jnp.where(child_count > 0, child_sum / child_count, E)
+    return mean_parents, mean_children
+
+
+def _elevation_gravity_target(
+    A: jnp.ndarray,
+    E: jnp.ndarray,
+    *,
+    multihop: bool,
+    hop_discount: float,
+) -> jnp.ndarray:
+    """Absolute elevation target for ``E ← E + lr * (target - E)``.
+
+    1-hop target is the parent/child midpoint. With ``multihop=True``,
+    influences (pulls toward each mean) combine as::
+
+        total_pull = local_pull + hop_discount * two_hop_pull
+
+    where ``two_hop`` uses ``A @ A`` (diagonal cleared). Empty 2-hop
+    neighborhoods contribute zero pull, so 1-hop-only nodes match the
+    historical update exactly.
+    """
+    mean_parents, mean_children = _mean_neighbor_elevations(A, E)
+    local_mean = (mean_parents + mean_children) * 0.5
+    if not multihop:
+        return local_mean
+
+    A2 = A @ A
+    A2 = A2.at[jnp.diag_indices(A.shape[0])].set(0.0)
+    mean_p2, mean_c2 = _mean_neighbor_elevations(A2, E)
+    two_hop_mean = (mean_p2 + mean_c2) * 0.5
+    discount = jnp.asarray(hop_discount, dtype=jnp.float64)
+    # target - E = (local_mean - E) + discount * (two_hop_mean - E)
+    # (_mean_neighbor_elevations falls back to E ⇒ zero 2-hop pull).
+    return local_mean + discount * (two_hop_mean - E)
+
+
 def _vstructure_gravity_well(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -206,7 +258,7 @@ def _vstructure_gravity_well(
     return jnp.clip(E_new, 0.0, 1.0)
 
 
-@partial(jax.jit, static_argnames=("k", "anneal", "fuzzy"))
+@partial(jax.jit, static_argnames=("k", "anneal", "fuzzy", "multihop"))
 def step(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -223,12 +275,14 @@ def step(
     fuzzy: bool = False,
     birth_rate: float = _DEFAULT_BIRTH_RATE,
     death_rate: float = _DEFAULT_DEATH_RATE,
+    multihop: bool = False,
+    hop_discount: float = _DEFAULT_HOP_DISCOUNT,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """One Bayesian CA tick (JAX): gravity, V-well, death, elev-orient birth.
 
-    Pure functional; wrapped in ``@jax.jit``. ``k``, ``anneal``, and
-    ``fuzzy`` are static. Default ``anneal=False`` / ``fuzzy=False`` keeps
-    the historical binary CA with static thresholds.
+    Pure functional; wrapped in ``@jax.jit``. ``k``, ``anneal``, ``fuzzy``,
+    and ``multihop`` are static. Defaults keep the historical binary,
+    1-hop CA with static thresholds.
 
     Parameters
     ----------
@@ -253,6 +307,11 @@ def step(
         binarize only after the final tick.
     birth_rate, death_rate:
         Soft update sizes when ``fuzzy=True`` (ignored in binary mode).
+    multihop:
+        If ``True``, elevation drift also pulls toward 2-hop parent/child
+        means from ``A @ A``, scaled by ``hop_discount`` (Upgrade 4).
+    hop_discount:
+        Weight on the 2-hop elevation target when ``multihop=True``.
     """
     A = jnp.asarray(A, dtype=jnp.float64)
     E = jnp.asarray(E, dtype=jnp.float64).reshape(-1)
@@ -278,14 +337,11 @@ def step(
     else:
         A = A * gravity_ok
 
-    # Elevation means weight by edge mass (binary 0/1 or fuzzy A_ij).
-    parent_count = A.sum(axis=0)
-    child_count = A.sum(axis=1)
-    parent_sum = A.T @ E
-    child_sum = A @ E
-    mean_parents = jnp.where(parent_count > 0, parent_sum / parent_count, E)
-    mean_children = jnp.where(child_count > 0, child_sum / child_count, E)
-    E = E + learning_rate * ((mean_parents + mean_children) * 0.5 - E)
+    # Elevation target: 1-hop means, optionally + discounted 2-hop (A@A).
+    target = _elevation_gravity_target(
+        A, E, multihop=multihop, hop_discount=hop_discount
+    )
+    E = E + learning_rate * (target - E)
     E = jnp.clip(E, 0.0, 1.0)
 
     # --- 2. V-structure gravity well -----------------------------------------
@@ -358,11 +414,12 @@ def warmup(
     *,
     k: int = 2,
     fuzzy: bool = False,
+    multihop: bool = False,
 ) -> str:
     """Compile ``step`` on a tiny problem and return device info."""
     A = jnp.triu(jnp.ones((n, n), dtype=jnp.float64), k=1) * 0.0
     E = jnp.linspace(1.0, 0.0, n, dtype=jnp.float64)
     Cov = jnp.eye(n, dtype=jnp.float64)
     # First call triggers JIT compile.
-    step(A, E, Cov, k=k, fuzzy=fuzzy)
+    step(A, E, Cov, k=k, fuzzy=fuzzy, multihop=multihop)
     return device_info()
