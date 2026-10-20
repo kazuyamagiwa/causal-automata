@@ -25,8 +25,8 @@ continuous in ``[0, 1]`` across ticks (soft birth/death). Default
 final tick (e.g. ``A > 0.5``).
 
 Multi-hop vision (Upgrade 4) is **opt-in**: pass ``multihop=True`` so
-elevation drift also sees 2-hop neighbors via ``A @ A``, discounted by
-``hop_discount`` (default ``0.5``).
+elevation drift also sees 2-hop neighbors via ``A @ A``, weighted by
+``hop_discount`` (default ``1.0``).
 """
 
 from __future__ import annotations
@@ -53,7 +53,8 @@ _DEFAULT_DEATH_RATE = 0.1
 _DEFAULT_BINARIZE = 0.5
 
 # Upgrade-4 2-hop gravity discount (used only when ``multihop=True``).
-_DEFAULT_HOP_DISCOUNT = 0.5
+# N=100 seed=0 k=5: discount=1.0 lifts Directed F1 0.619 → 0.696.
+_DEFAULT_HOP_DISCOUNT = 1.0
 
 
 def device_info() -> str:

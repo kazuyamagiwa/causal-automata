@@ -314,7 +314,7 @@ def run_jax_ca(
     death_rate: float = 0.1,
     binarize_threshold: float = FUZZY_BINARIZE,
     multihop: bool = False,
-    hop_discount: float = 0.5,
+    hop_discount: float = 1.0,
     algorithm: str | None = None,
 ) -> BenchRow:
     try:
@@ -493,7 +493,7 @@ def run_benchmark(
     death_rate: float = 0.1,
     multihop: bool = False,
     compare_multihop: bool = False,
-    hop_discount: float = 0.5,
+    hop_discount: float = 1.0,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
     if k is None:
         k = default_conditioning_k(n)
@@ -692,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "Enable Upgrade-4 2-hop gravity: elevation drift also uses A@A "
-            "neighbors, scaled by --hop-discount (default 0.5)."
+            "neighbors, scaled by --hop-discount (default 1.0)."
         ),
     )
     parser.add_argument(
@@ -703,8 +703,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--hop-discount",
         type=float,
-        default=0.5,
-        help="Discount on 2-hop elevation pull (default 0.5; with --multihop).",
+        default=1.0,
+        help="Weight on 2-hop elevation pull (default 1.0; with --multihop).",
     )
     args = parser.parse_args(argv)
 
