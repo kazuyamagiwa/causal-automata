@@ -27,7 +27,8 @@ Run::
     # Upgrade 3 — binary vs fuzzy continuous edges (same SEM, default k):
     uv run python -m causal_automata.benchmark --n 100 --ca-only --compare-fuzzy
 
-    # Upgrade 4 — 1-hop vs 2-hop gravity (binary, default k):
+    # Upgrade 4 — Maximum Accuracy Mode (2-hop gravity) vs 1-hop baseline:
+    uv run python -m causal_automata.benchmark --n 100 --ca-only --k 5 --multihop
     uv run python -m causal_automata.benchmark --n 100 --ca-only --k 5 --compare-multihop
 
     # CPU / no-GPU smoke (import + GOLEM init only; no invented GPU timings):
