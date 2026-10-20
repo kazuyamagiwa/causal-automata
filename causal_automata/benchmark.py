@@ -24,6 +24,9 @@ Run::
     # Upgrade 2 — conditioning-set sweep (same SEM bundle, several k):
     uv run python -m causal_automata.benchmark --n 100 --ca-only --k-sweep 3,4,5
 
+    # Upgrade 3 — binary vs fuzzy continuous edges (same SEM, default k):
+    uv run python -m causal_automata.benchmark --n 100 --ca-only --compare-fuzzy
+
     # CPU / no-GPU smoke (import + GOLEM init only; no invented GPU timings):
     uv run python -m causal_automata.benchmark --smoke
 """
@@ -283,6 +286,9 @@ ANNEAL_BIRTH_START = 0.20
 ANNEAL_BIRTH_END = 0.05
 
 
+FUZZY_BINARIZE = 0.5
+
+
 def run_jax_ca(
     Cov: np.ndarray,
     A_init: np.ndarray,
@@ -300,6 +306,11 @@ def run_jax_ca(
     threshold_death_end: float | None = None,
     threshold_birth_end: float | None = None,
     label_k: bool = False,
+    fuzzy: bool = False,
+    birth_rate: float = 0.25,
+    death_rate: float = 0.25,
+    binarize_threshold: float = FUZZY_BINARIZE,
+    algorithm: str | None = None,
 ) -> BenchRow:
     try:
         import jax.numpy as jnp
@@ -312,7 +323,7 @@ def run_jax_ca(
             f"Import error: {exc}"
         ) from exc
 
-    A = jnp.asarray(A_init)
+    A = jnp.asarray(A_init, dtype=jnp.float64)
     E = jnp.asarray(E_init)
     Cov_j = jnp.asarray(Cov)
 
@@ -340,6 +351,9 @@ def run_jax_ca(
                 progress=float(tick) / float(denom),
                 threshold_death_start=death_start,
                 threshold_birth_start=birth_start,
+                fuzzy=fuzzy,
+                birth_rate=birth_rate,
+                death_rate=death_rate,
             )
 
         schedule = (
@@ -361,23 +375,43 @@ def run_jax_ca(
                 threshold_birth=birth_end,
                 k=k,
                 anneal=False,
+                fuzzy=fuzzy,
+                birth_rate=birth_rate,
+                death_rate=death_rate,
             )
 
         schedule = f"static death={death_end:.2f} birth={birth_end:.2f}"
 
+    edge_mode = (
+        f"fuzzy birth_rate={birth_rate:.2f} death_rate={death_rate:.2f} "
+        f"binarize>{binarize_threshold:.2f}"
+        if fuzzy
+        else "binary"
+    )
+
     # Warmup compile outside the timed window (discard result; re-init state).
     _ = _call(0)
-    A = jnp.asarray(A_init)
+    A = jnp.asarray(A_init, dtype=jnp.float64)
     E = jnp.asarray(E_init)
     t0 = time.perf_counter()
     for tick in range(ticks):
         A, E = _call(tick)
     elapsed = time.perf_counter() - t0
-    A_pred = _as_binary_adj(np.asarray(A).copy())
+    A_np = np.asarray(A).copy()
+    if fuzzy:
+        A_pred = _as_binary_adj((A_np > binarize_threshold).astype(np.float64))
+    else:
+        A_pred = _as_binary_adj(A_np)
     d, s = _score(A_pred, A_true)
-    algo = f"Bayesian CA (JAX, k={k})" if label_k else "Bayesian CA (JAX)"
+    if algorithm is None:
+        if label_k:
+            algorithm = f"Bayesian CA (JAX, k={k})"
+        elif fuzzy:
+            algorithm = f"Bayesian CA (JAX, fuzzy, k={k})"
+        else:
+            algorithm = "Bayesian CA (JAX)"
     return BenchRow(
-        algorithm=algo,
+        algorithm=algorithm,
         skeleton_f1=s.f1,
         directed_f1=d.f1,
         wall_time_s=elapsed,
@@ -387,7 +421,7 @@ def run_jax_ca(
         skeleton_tp=s.tp,
         skeleton_fp=s.fp,
         skeleton_fn=s.fn,
-        notes=f"ticks={ticks} k={k} {schedule} {device_info()}",
+        notes=f"ticks={ticks} k={k} {edge_mode} {schedule} {device_info()}",
     )
 
 
@@ -434,6 +468,10 @@ def run_benchmark(
     golem_iters: int = GOLEM_DEFAULT_KWARGS["num_iter"],
     ca_only: bool = False,
     anneal: bool = False,
+    fuzzy: bool = False,
+    compare_fuzzy: bool = False,
+    birth_rate: float = 0.25,
+    death_rate: float = 0.25,
 ) -> tuple[list[BenchRow], SyntheticBundle]:
     if k is None:
         k = default_conditioning_k(n)
@@ -447,20 +485,53 @@ def run_benchmark(
             run_golem(bundle.X, bundle.A_true, want_gpu=want_gpu, num_iter=golem_iters)
         )
     ks = list(k_sweep) if k_sweep else [k]
-    label_k = len(ks) > 1
+    label_k = len(ks) > 1 and not compare_fuzzy
     for ki in ks:
-        rows.append(
-            run_jax_ca(
-                bundle.Cov,
-                bundle.A_init,
-                bundle.E_init,
-                bundle.A_true,
-                ticks=ticks,
-                k=ki,
-                anneal=anneal,
-                label_k=label_k,
+        if compare_fuzzy:
+            rows.append(
+                run_jax_ca(
+                    bundle.Cov,
+                    bundle.A_init,
+                    bundle.E_init,
+                    bundle.A_true,
+                    ticks=ticks,
+                    k=ki,
+                    anneal=anneal,
+                    fuzzy=False,
+                    algorithm=f"Bayesian CA (JAX, binary, k={ki})",
+                )
             )
-        )
+            rows.append(
+                run_jax_ca(
+                    bundle.Cov,
+                    bundle.A_init,
+                    bundle.E_init,
+                    bundle.A_true,
+                    ticks=ticks,
+                    k=ki,
+                    anneal=anneal,
+                    fuzzy=True,
+                    birth_rate=birth_rate,
+                    death_rate=death_rate,
+                    algorithm=f"Bayesian CA (JAX, fuzzy, k={ki})",
+                )
+            )
+        else:
+            rows.append(
+                run_jax_ca(
+                    bundle.Cov,
+                    bundle.A_init,
+                    bundle.E_init,
+                    bundle.A_true,
+                    ticks=ticks,
+                    k=ki,
+                    anneal=anneal,
+                    label_k=label_k,
+                    fuzzy=fuzzy,
+                    birth_rate=birth_rate,
+                    death_rate=death_rate,
+                )
+            )
     return rows, bundle
 
 
@@ -529,6 +600,31 @@ def main(argv: list[str] | None = None) -> int:
             "Default remains static death=0.05 / birth=0.10 (Phase-6 baseline)."
         ),
     )
+    parser.add_argument(
+        "--fuzzy",
+        action="store_true",
+        help=(
+            "Enable Upgrade-3 continuous edge weights A∈[0,1] with soft "
+            "birth/death; binarize only after the final tick (A>0.5)."
+        ),
+    )
+    parser.add_argument(
+        "--compare-fuzzy",
+        action="store_true",
+        help="Run binary and fuzzy CA side-by-side on the same SEM bundle.",
+    )
+    parser.add_argument(
+        "--birth-rate",
+        type=float,
+        default=0.25,
+        help="Fuzzy birth increment (default 0.25; only with --fuzzy).",
+    )
+    parser.add_argument(
+        "--death-rate",
+        type=float,
+        default=0.25,
+        help="Fuzzy death decay (default 0.25; only with --fuzzy).",
+    )
     args = parser.parse_args(argv)
 
     logging.getLogger("castle").setLevel(logging.WARNING)
@@ -563,6 +659,10 @@ def main(argv: list[str] | None = None) -> int:
         golem_iters=args.golem_iters,
         ca_only=args.ca_only,
         anneal=args.anneal,
+        fuzzy=args.fuzzy,
+        compare_fuzzy=args.compare_fuzzy,
+        birth_rate=args.birth_rate,
+        death_rate=args.death_rate,
     )
     _p(
         f"N={bundle.n}  seed={bundle.seed}  samples={bundle.X.shape[0]}  "

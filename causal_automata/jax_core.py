@@ -18,6 +18,11 @@ Smoke::
 Adaptive thresholds (Upgrade 1) are **opt-in**: pass ``anneal=True`` with
 ``progress`` in ``[0, 1]`` and optional ``threshold_*_start`` endpoints.
 Default ``anneal=False`` keeps the historical static thresholds.
+
+Fuzzy edges (Upgrade 3) are **opt-in**: pass ``fuzzy=True`` so ``A`` stays
+continuous in ``[0, 1]`` across ticks (soft birth/death). Default
+``fuzzy=False`` keeps the binary CA. Callers should binarize only after the
+final tick (e.g. ``A > 0.5``).
 """
 
 from __future__ import annotations
@@ -37,6 +42,11 @@ _RIDGE = 1e-8
 _DEFAULT_DEATH_START = 0.05
 _DEFAULT_BIRTH_START = 0.15
 
+# Upgrade-3 soft birth / death step sizes (used only when ``fuzzy=True``).
+_DEFAULT_BIRTH_RATE = 0.25
+_DEFAULT_DEATH_RATE = 0.25
+_DEFAULT_BINARIZE = 0.5
+
 
 def device_info() -> str:
     """Short description of the default JAX backend / device."""
@@ -47,10 +57,17 @@ def device_info() -> str:
     return f"jax backend={jax.default_backend()} device={d0.platform}:{d0.device_kind}"
 
 
-def _undirected_neighbors(A: jnp.ndarray) -> jnp.ndarray:
-    """Binary undirected adjacency with zero diagonal."""
+def _undirected_neighbors(A: jnp.ndarray, *, fuzzy: bool = False) -> jnp.ndarray:
+    """Undirected adjacency with zero diagonal.
+
+    Binary mode: ``(A + A.T) > 0``. Fuzzy mode: continuous
+    ``max(A, A.T)`` so gravity / V-wells feel fractional edge mass.
+    """
     n = A.shape[0]
-    U = ((A + A.T) > 0).astype(A.dtype)
+    if fuzzy:
+        U = jnp.maximum(A, A.T)
+    else:
+        U = ((A + A.T) > 0).astype(A.dtype)
     return U.at[jnp.diag_indices(n)].set(0)
 
 
@@ -161,10 +178,12 @@ def _vstructure_gravity_well(
     Cov: jnp.ndarray,
     learning_rate: float,
     threshold_death: float,
+    *,
+    fuzzy: bool = False,
 ) -> jnp.ndarray:
     """Sink elevations of collider nodes (functional)."""
     n = A.shape[0]
-    U = _undirected_neighbors(A)
+    U = _undirected_neighbors(A, fuzzy=fuzzy)
     undirected_absent = (A + A.T) == 0
     undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
     shared_counts = U @ U
@@ -186,7 +205,7 @@ def _vstructure_gravity_well(
     return jnp.clip(E_new, 0.0, 1.0)
 
 
-@partial(jax.jit, static_argnames=("k", "anneal"))
+@partial(jax.jit, static_argnames=("k", "anneal", "fuzzy"))
 def step(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -200,12 +219,15 @@ def step(
     progress: float = 1.0,
     threshold_death_start: float = _DEFAULT_DEATH_START,
     threshold_birth_start: float = _DEFAULT_BIRTH_START,
+    fuzzy: bool = False,
+    birth_rate: float = _DEFAULT_BIRTH_RATE,
+    death_rate: float = _DEFAULT_DEATH_RATE,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """One Bayesian CA tick (JAX): gravity, V-well, death, elev-orient birth.
 
-    Pure functional; wrapped in ``@jax.jit``. ``k`` and ``anneal`` are
-    static. Default ``anneal=False`` uses ``threshold_death`` /
-    ``threshold_birth`` unchanged (historical static schedule).
+    Pure functional; wrapped in ``@jax.jit``. ``k``, ``anneal``, and
+    ``fuzzy`` are static. Default ``anneal=False`` / ``fuzzy=False`` keeps
+    the historical binary CA with static thresholds.
 
     Parameters
     ----------
@@ -222,11 +244,21 @@ def step(
         Only used when ``anneal=True``.
     threshold_death_start, threshold_birth_start:
         Early-tick endpoints when ``anneal=True``.
+    fuzzy:
+        If ``False`` (default), adjacency stays binary (hard birth/death).
+        If ``True``, ``A`` is continuous in ``[0, 1]``: birth adds
+        ``birth_rate``, death subtracts ``death_rate``, and gravity /
+        V-wells use fractional undirected weights. Callers should
+        binarize only after the final tick.
+    birth_rate, death_rate:
+        Soft update sizes when ``fuzzy=True`` (ignored in binary mode).
     """
     A = jnp.asarray(A, dtype=jnp.float64)
     E = jnp.asarray(E, dtype=jnp.float64).reshape(-1)
     Cov = jnp.asarray(Cov, dtype=jnp.float64)
     n = A.shape[0]
+    birth_rate = jnp.asarray(birth_rate, dtype=jnp.float64)
+    death_rate = jnp.asarray(death_rate, dtype=jnp.float64)
 
     if anneal:
         # Adaptive thresholds: high early, low late (traced scalars).
@@ -239,8 +271,13 @@ def step(
     # --- 1. Gravity: downhill-only edges, then elevation drift ---------------
     gravity_ok = E[:, None] > E[None, :]
     gravity_ok = gravity_ok.at[jnp.diag_indices(n)].set(False)
-    A = A * gravity_ok
+    if fuzzy:
+        # Soft clear of uphill mass; keep fractional downhill weights.
+        A = jnp.where(gravity_ok, A, jnp.maximum(0.0, A - death_rate))
+    else:
+        A = A * gravity_ok
 
+    # Elevation means weight by edge mass (binary 0/1 or fuzzy A_ij).
     parent_count = A.sum(axis=0)
     child_count = A.sum(axis=1)
     parent_sum = A.T @ E
@@ -251,9 +288,11 @@ def step(
     E = jnp.clip(E, 0.0, 1.0)
 
     # --- 2. V-structure gravity well -----------------------------------------
-    E = _vstructure_gravity_well(A, E, Cov, learning_rate, death_t)
+    E = _vstructure_gravity_well(
+        A, E, Cov, learning_rate, death_t, fuzzy=fuzzy
+    )
 
-    U = _undirected_neighbors(A)
+    U = _undirected_neighbors(A, fuzzy=fuzzy)
 
     # Pairwise Cov-ranked Z and partial correlations (fixed N×N×k shapes).
     Z, valid = _pairwise_topk_Z(U, Cov, k)
@@ -262,39 +301,67 @@ def step(
     # --- 3. Death ------------------------------------------------------------
     existing = A > 0
     kill = existing & (jnp.abs(rho) < death_t)
-    A = jnp.where(kill, 0.0, A)
-    U = _undirected_neighbors(A)
+    if fuzzy:
+        A = jnp.where(kill, jnp.maximum(0.0, A - death_rate), A)
+    else:
+        A = jnp.where(kill, 0.0, A)
+    U = _undirected_neighbors(A, fuzzy=fuzzy)
     Z, valid = _pairwise_topk_Z(U, Cov, k)
     rho = _pairwise_partial_corr(Cov, Z, valid, k)
 
-    # --- 4. Birth: all absent undirected pairs; elevation picks direction ----
-    undirected_absent = (A + A.T) == 0
-    undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
-    # Evaluate unordered pairs once via upper triangle, then orient.
-    candidates = jnp.triu(undirected_absent, k=1)
+    # --- 4. Birth: elevation-oriented; fuzzy may reinforce existing mass ----
+    if fuzzy:
+        # All unordered pairs can grow gradually (absent-only would stall at
+        # birth_rate < binarize threshold after a single increment).
+        candidates = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
+    else:
+        undirected_absent = (A + A.T) == 0
+        undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
+        candidates = jnp.triu(undirected_absent, k=1)
     strong = candidates & (jnp.abs(rho) > birth_t)
     forward = strong & (E[:, None] > E[None, :])
     backward = strong & (E[None, :] > E[:, None])
     # backward[i,j] means E[j] > E[i] on upper-tri (i<j) ⇒ birth j→i
-    A = jnp.where(forward, 1.0, A)
-    A = jnp.where(backward.T, 1.0, A)  # place j→i at (j,i)
+    if fuzzy:
+        A = jnp.where(forward, jnp.minimum(1.0, A + birth_rate), A)
+        A = jnp.where(backward.T, jnp.minimum(1.0, A + birth_rate), A)
+        # Soft-clear the opposite orientation when we grow an edge.
+        A = jnp.where(forward.T, jnp.maximum(0.0, A - death_rate), A)
+        A = jnp.where(backward, jnp.maximum(0.0, A - death_rate), A)
+    else:
+        A = jnp.where(forward, 1.0, A)
+        A = jnp.where(backward.T, 1.0, A)  # place j→i at (j,i)
 
-    # Binary + downhill clear (after collider sinks may flatten E).
-    A = (A > 0).astype(A.dtype)
-    A = A * (E[:, None] > E[None, :])
+    # Downhill clear (after collider sinks may flatten E).
+    downhill = E[:, None] > E[None, :]
+    if fuzzy:
+        A = jnp.where(downhill, A, jnp.maximum(0.0, A - death_rate))
+        A = jnp.clip(A, 0.0, 1.0)
+    else:
+        # Binary adjacency (historical path).
+        A = (A > 0).astype(A.dtype)
+        A = A * downhill
     A = A.at[jnp.diag_indices(n)].set(0.0)
     return A, E
+
+
+def binarize(A: jnp.ndarray, threshold: float = _DEFAULT_BINARIZE) -> jnp.ndarray:
+    """Threshold continuous / binary adjacency for metrics (post-loop)."""
+    A = jnp.asarray(A, dtype=jnp.float64)
+    out = (A > threshold).astype(A.dtype)
+    return out.at[jnp.diag_indices(A.shape[0])].set(0.0)
 
 
 def warmup(
     n: int = 8,
     *,
     k: int = 2,
+    fuzzy: bool = False,
 ) -> str:
     """Compile ``step`` on a tiny problem and return device info."""
     A = jnp.triu(jnp.ones((n, n), dtype=jnp.float64), k=1) * 0.0
     E = jnp.linspace(1.0, 0.0, n, dtype=jnp.float64)
     Cov = jnp.eye(n, dtype=jnp.float64)
     # First call triggers JIT compile.
-    step(A, E, Cov, k=k)
+    step(A, E, Cov, k=k, fuzzy=fuzzy)
     return device_info()
