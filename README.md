@@ -30,17 +30,30 @@ Or using `uv`:
 uv add "causal-automata[jax]"
 ```
 
-## Benchmark — N=100 on Tesla T4
+## Benchmark — N=100
 
-Final figures (Colab **Tesla T4**, GOLEM `num_iter=20000`):
+Upgrade 2 default: **`k=3` if N≤50**, **`k=5` if N>50**. On N=100 (`seed=0`, static thresholds, `ticks=100`), Bayesian CA reaches Skeleton **0.937** / Directed **0.619** in about **2.8s**:
 
 | Algorithm | Skeleton F1 | Directed F1 | Wall Time (s) |
 | --- | ---: | ---: | ---: |
 | PC (gcastle) | 0.968 | 0.813 | 528.631 |
 | GOLEM (gcastle) | 0.577 | 0.403 | 251.182 |
-| Bayesian CA (JAX) | 0.812 | 0.483 | 0.323 |
+| Bayesian CA (JAX, k=5) | **0.937** | **0.619** | **~2.8** |
 
-In this setup, Bayesian CA runs in **0.323s**, compared with **251.182s** for GOLEM and **528.631s** for PC, with skeleton / directed F1 of **0.812 / 0.483** versus GOLEM **0.577 / 0.403** (PC: **0.968 / 0.813**).
+PC / GOLEM wall times are Colab **Tesla T4** (`num_iter=20000`). CA wall time is the Upgrade-2 `k=5` run (~2.8s); at historical `k=3` the same CA finished in **0.323s** on T4 with Directed F1 **0.483**.
+
+Conditioning-set sweep (CA-only, same SEM):
+
+| Algorithm | Skeleton F1 | Directed F1 | Wall Time (s) |
+| --- | ---: | ---: | ---: |
+| Bayesian CA (JAX, k=3) | 0.812 | 0.483 | 2.314 |
+| Bayesian CA (JAX, k=4) | 0.915 | 0.546 | 2.481 |
+| Bayesian CA (JAX, k=5) | **0.937** | **0.619** | **2.871** |
+| Bayesian CA (JAX, k=6) | 0.937 | 0.619 | 2.454 |
+| Bayesian CA (JAX, k=7) | 0.937 | 0.619 | 3.049 |
+| Bayesian CA (JAX, k=8) | 0.937 | 0.627 | 3.647 |
+
+Directed F1 jumps through `k=5`, then plateaus (`k=6–7` flat; `k=8` a tiny bump). No collider-trap collapse on this graph through `k=8`.
 
 ## Documentation
 
@@ -64,9 +77,10 @@ python -m causal_automata.bayesian_synth --n 10
 python -m causal_automata.bayesian_synth --n 50 --backend jax
 python -m causal_automata.bayesian_synth --n 100
 
-# Benchmark vs gCastle PC / GOLEM (default N=100)
+# Benchmark vs gCastle PC / GOLEM (default N=100, k=5)
 python -m causal_automata.benchmark
 python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
+python -m causal_automata.benchmark --n 100 --ca-only --k-sweep 5,6,7,8
 python -m causal_automata.benchmark --smoke   # device checks + GOLEM init only
 ```
 

@@ -92,6 +92,11 @@ def _pairwise_partial_corr(
 ) -> jnp.ndarray:
     """``rho[i, j]`` for all pairs, conditioning on padded top-``k`` ``Z``.
 
+    Builds a batched block of shape ``(N, N, 2+k, 2+k)`` (endpoints plus the
+    conditioning set) and inverts with ``jnp.linalg.inv``. ``k`` is a JIT
+    static arg, so ``k=3`` → ``5×5``, ``k=4`` → ``6×6``, ``k=5`` → ``7×7``
+    each get a dedicated XLA specialization — no Python resize per tick.
+
     Invalid ``Z`` slots map to independent dummy variables appended to ``Cov``
     so the invert size stays fixed under JIT (conditioning on independents is a
     no-op relative to a smaller ``Z``).
@@ -106,7 +111,7 @@ def _pairwise_partial_corr(
         )
         sub = Cov[nodes[..., :, None], nodes[..., None, :]]
     else:
-        # Augment Cov with k independent unit dummies.
+        # Augment Cov with k independent unit dummies (pad short Z sets).
         cov_aug = jnp.zeros((n + k, n + k), dtype=Cov.dtype)
         cov_aug = cov_aug.at[:n, :n].set(Cov)
         cov_aug = cov_aug.at[n:, n:].set(jnp.eye(k, dtype=Cov.dtype))
@@ -114,6 +119,7 @@ def _pairwise_partial_corr(
         z_pad = jnp.where(valid, Z, dummy)
         ii = jnp.arange(n)[:, None, None]
         jj = jnp.arange(n)[None, :, None]
+        # nodes[..., :] = (i, j, Z_0, …, Z_{k-1}) → (2+k)×(2+k) blocks.
         nodes = jnp.concatenate(
             [
                 jnp.broadcast_to(ii, (n, n, 1)),
@@ -203,6 +209,10 @@ def step(
 
     Parameters
     ----------
+    k:
+        Conditioning-set size for death/birth partial correlations (static).
+        Batched inversions use ``(2+k)×(2+k)`` blocks; raise via the
+        benchmark / synth ``--k`` CLI (Upgrade 2).
     anneal:
         If ``False`` (default), ignore ``progress`` / ``*_start`` and use
         the end thresholds as fixed gates. If ``True``, linearly
