@@ -666,14 +666,19 @@ def main(argv: list[str] | None = None) -> int:
         "--fuzzy",
         action="store_true",
         help=(
-            "Enable Upgrade-3 continuous edge weights A∈[0,1] with soft "
-            "birth/death; binarize only after the final tick (A>0.5)."
+            "Upgrade 3 (opt-in): continuous edge weights A∈[0,1] with soft "
+            "birth/death instead of hard 0/1 snaps. Binarize only after the "
+            "final tick (A>0.5). Experimental — did not beat binary on the "
+            "N=100 seed=0 SEM; default remains binary."
         ),
     )
     parser.add_argument(
         "--compare-fuzzy",
         action="store_true",
-        help="Run binary and fuzzy CA side-by-side on the same SEM bundle.",
+        help=(
+            "A/B: run binary and --fuzzy CA on the same SEM bundle "
+            "(Upgrade 3 comparison table)."
+        ),
     )
     parser.add_argument(
         "--birth-rate",
@@ -691,20 +696,28 @@ def main(argv: list[str] | None = None) -> int:
         "--multihop",
         action="store_true",
         help=(
-            "Enable Upgrade-4 2-hop gravity: elevation drift also uses A@A "
-            "neighbors, scaled by --hop-discount (default 1.0)."
+            "Upgrade 4 Maximum Accuracy Mode (opt-in): 2-hop elevation "
+            "gravity via A@A, weighted by --hop-discount (default 1.0). "
+            "On N=100 seed=0 k=5, lifts Directed F1 from 0.619 → 0.696 "
+            "with flat wall time. Default remains fast 1-hop gravity."
         ),
     )
     parser.add_argument(
         "--compare-multihop",
         action="store_true",
-        help="Run 1-hop and multihop CA side-by-side on the same SEM bundle.",
+        help=(
+            "A/B: run 1-hop and --multihop CA on the same SEM bundle "
+            "(Upgrade 4 comparison table)."
+        ),
     )
     parser.add_argument(
         "--hop-discount",
         type=float,
         default=1.0,
-        help="Weight on 2-hop elevation pull (default 1.0; with --multihop).",
+        help=(
+            "Weight on the 2-hop elevation pull when --multihop is set "
+            "(default 1.0; tuned for N=100 Directed F1 0.696)."
+        ),
     )
     args = parser.parse_args(argv)
 
