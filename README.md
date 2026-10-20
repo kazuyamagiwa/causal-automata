@@ -6,16 +6,19 @@
 
 A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery.
 
+**v0.2.0** — JAX `@jit` physics, dynamic `k`, and Maximum Accuracy Mode (`--multihop`, Directed F1 **0.696** on N=100). See [CHANGELOG.md](CHANGELOG.md).
+
 ## Installation
 
 ```bash
-pip install causal-automata
+pip install "causal-automata==0.2.0"
 ```
 
 With CPU JAX:
 
 ```bash
 pip install "causal-automata[jax]"
+# or: uv pip install "causal-automata[jax]"
 ```
 
 With NVIDIA CUDA JAX (and the Colab-style stack):
@@ -24,7 +27,7 @@ With NVIDIA CUDA JAX (and the Colab-style stack):
 pip install "causal-automata[cuda]"
 ```
 
-Or using `uv`:
+Or using `uv` in a project:
 
 ```bash
 uv add "causal-automata[jax]"

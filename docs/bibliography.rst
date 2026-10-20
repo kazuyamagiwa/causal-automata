@@ -23,7 +23,8 @@ Related background
 Software
 --------
 
-* This package: ``causal-automata`` v0.1.0 — NumPy prototype
+* This package: ``causal-automata`` v0.2.0 — JAX ``@jit`` engine, dynamic
+  ``k``, ``--multihop`` Maximum Accuracy Mode
   (:mod:`causal_automata.bayesian`) and JAX ``@jit`` port
   (:mod:`causal_automata.jax_core`).
 * Benchmarks via `gCastle <https://github.com/huawei-noah/trustworthyAI>`_
