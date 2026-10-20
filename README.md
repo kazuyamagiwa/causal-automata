@@ -32,28 +32,28 @@ uv add "causal-automata[jax]"
 
 ## Benchmark — N=100
 
-Baseline latency on Colab **Tesla T4** (GOLEM `num_iter=20000`, CA at historical `k=3`):
+Upgrade 2 default: **`k=3` if N≤50**, **`k=5` if N>50**. On N=100 (`seed=0`, static thresholds, `ticks=100`), Bayesian CA reaches Skeleton **0.937** / Directed **0.619** in about **2.8s**:
 
 | Algorithm | Skeleton F1 | Directed F1 | Wall Time (s) |
 | --- | ---: | ---: | ---: |
 | PC (gcastle) | 0.968 | 0.813 | 528.631 |
 | GOLEM (gcastle) | 0.577 | 0.403 | 251.182 |
-| Bayesian CA (JAX, k=3) | 0.812 | 0.483 | 0.323 |
+| Bayesian CA (JAX, k=5) | **0.937** | **0.619** | **~2.8** |
 
-**Upgrade 2** raises the default conditioning-set size to **`k=5` for `n ≥ 100`** (keeps `k=3` for smaller graphs). On the same SEM (`seed=0`), CA accuracy becomes Skeleton **0.937** / Directed **0.619**.
+PC / GOLEM wall times are Colab **Tesla T4** (`num_iter=20000`). CA wall time is the Upgrade-2 `k=5` run (~2.8s); at historical `k=3` the same CA finished in **0.323s** on T4 with Directed F1 **0.483**.
 
-Conditioning-set sweep (CA-only, CPU JAX, static thresholds, `ticks=100`):
+Conditioning-set sweep (CA-only, same SEM):
 
 | Algorithm | Skeleton F1 | Directed F1 | Wall Time (s) |
 | --- | ---: | ---: | ---: |
 | Bayesian CA (JAX, k=3) | 0.812 | 0.483 | 2.314 |
 | Bayesian CA (JAX, k=4) | 0.915 | 0.546 | 2.481 |
-| Bayesian CA (JAX, k=5) | 0.937 | 0.619 | 3.105 |
+| Bayesian CA (JAX, k=5) | **0.937** | **0.619** | **2.871** |
 | Bayesian CA (JAX, k=6) | 0.937 | 0.619 | 2.454 |
 | Bayesian CA (JAX, k=7) | 0.937 | 0.619 | 3.049 |
 | Bayesian CA (JAX, k=8) | 0.937 | 0.627 | 3.647 |
 
-Directed F1 jumps through `k=5`, then **plateaus** (`k=6–7` flat; `k=8` a tiny bump). No collider-trap collapse on this N=100 graph through `k=8`.
+Directed F1 jumps through `k=5`, then plateaus (`k=6–7` flat; `k=8` a tiny bump). No collider-trap collapse on this graph through `k=8`.
 
 ## Documentation
 

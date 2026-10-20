@@ -348,12 +348,12 @@ def default_conditioning_k(n: int) -> int:
 
     On the N=100 seed=0 SEM, Directed F1 jumps from 0.483 (``k=3``) to
     0.619 (``k=5``) then plateaus through ``k=8`` (no collider-trap
-    collapse on that graph). Use ``k=5`` for ``n >= 100``; keep the
-    historical ``k=3`` for smaller graphs.
+    collapse on that graph). Use ``k=3`` when ``n <= 50`` and ``k=5``
+    when ``n > 50``.
     """
-    if n >= 100:
-        return 5
-    return 3
+    if n <= 50:
+        return 3
+    return 5
 
 
 def _default_samples(n: int) -> int:
@@ -622,7 +622,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Conditioning-set size for death/birth partial correlations "
-            "(default: 3 for n<100, 5 for n>=100; jax_core.step API default "
+            "(default: k=3 if N<=50, k=5 if N>50; jax_core.step API default "
             "remains 2). JAX path uses static k with (2+k)×(2+k) batched "
             "inversions."
         ),

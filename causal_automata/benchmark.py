@@ -480,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Conditioning-set size for CA partial correlations "
-            "(default: 3 for n<100, 5 for n>=100 — Upgrade 2). "
+            "(default: k=3 if N<=50, k=5 if N>50 — Upgrade 2). "
             "JIT-static; batched inv blocks are (2+k)×(2+k)."
         ),
     )
