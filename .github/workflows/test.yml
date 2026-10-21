@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # Testing across the Python versions specified in your classifiers
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
@@ -26,9 +25,11 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install package and dependencies
-        # Installs the package with CPU extras, plus pytest for running the harness
-        run: uv pip install --system ".[cpu]" pytest
+        # Create a lightning-fast virtual environment and install into it
+        run: |
+          uv venv
+          uv pip install ".[cpu]" pytest
 
       - name: Run synthetic data tests
-        # Replace 'tests/' with the exact path to your test script if it's named differently
-        run: pytest tests/
+        # 'uv run' automatically executes pytest inside the virtual environment
+        run: uv run pytest tests/
