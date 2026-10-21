@@ -2,7 +2,7 @@
 title: "グラフのセルオートマトンから、超高速な因果発見エンジンへ"
 emoji: "🧬"
 type: "tech"
-topics: ["python", "jax", "causalinference", "githubactions", "uv", "cellularautomata"]
+topics: ["python", "jax", "causalinference", "cellularautomata", "dag"]
 published: false
 ---
 
@@ -10,7 +10,7 @@ published: false
 
 前回の記事（[スマホとCursorだけで、6年放置したリポジトリをuv時代の構成に作り直した話](https://zenn.dev/katnap/articles/zenn-cursor-smartphone-uv-modernization)）では、[graphnet-automata](https://github.com/kazuyamagiwa/graphnet-automata) を現代化しました。あのリポジトリの核は「隣接行列を局所ルールで更新し、ネットワークを育てる」というアイデアでした。
 
-本稿はその続きです。同じ「行列をセルオートマトン（CA）として進化させる」発想が、観測データから DAG（有向非巡回グラフ）を復元する **因果発見エンジン** に化けた経緯を、アイデア → 物理メタファー → JAX による爆速化 → パッケージ公開まで一気にたどります。
+本稿はその続きです。同じ「行列をセルオートマトン（CA）として進化させる」発想が、観測データから DAG（有向非巡回グラフ）を復元する **因果発見エンジン** に化けた経緯を、アイデア → 物理メタファー → JAX による爆速化までたどります。
 
 成果物はこちらです。
 
@@ -44,7 +44,7 @@ for t in range(steps):
 
 因果発見の古典的アプローチは、PC アルゴリズムのような **制約ベース** の探索です。独立性検定を繰り返し、エッジを削り、向きを決めていく。正しく動く一方で、候補エッジと条件集合の組み合わせはすぐ組み合わせ爆発します。
 
-あるとき「Aha!」が来ました。
+そこで、こんな読み替えが頭に浮かびました。
 
 > CA の局所行列更新は、独立性／条件付き独立性の“力”を並べて書けば、そのまま DAG 探索になるのでは？
 
@@ -179,66 +179,6 @@ python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
 
 ---
 
-## 5. スピンアウトと近代化
-
-アイデアが「研究用ノート」から「使えるエンジン」に見えてきたタイミングで、graphnet-automata から切り離して専用リポジトリ **causal-automata** を切り出しました。前回の近代化作業の延長線上で、最初から現代的な Python パッケージとして組み立てています。
-
-### `pyproject.toml` + `uv` + ハードウェア extras
-
-コア依存は CPU でも軽い NumPy / NetworkX / scikit-learn に留め、アクセラレータは extras に分離しました。
-
-```toml
-[project.optional-dependencies]
-# CPU 向け JAX
-jax = [
-    "jax>=0.4.30",
-    "jaxlib>=0.4.30",
-]
-# NVIDIA / Colab 向け GPU スタック
-cuda = [
-    "jax[cuda13]",
-    "torch>=2.1",
-    "gcastle>=1.0.4",
-]
-```
-
-使い分けはこうです。
-
-```bash
-# CPU
-uv pip install "causal-automata[jax]"
-
-# GPU（CUDA）
-uv pip install "causal-automata[cuda]"
-```
-
-「まず動かしたい人」と「ベンチマークや Colab GPU で本気を出したい人」を、同じパッケージで分岐させられます。
-
-### GitHub Actions × Trusted Publishing（OIDC）
-
-公開は GitHub Releases をトリガに、`uv build` → `uv publish` を走らせています。PyPI の **Trusted Publishing** により、API トークンをリポジトリに置かず、OIDC で一時クレデンシャルを発行します。
-
-```yaml
-# .github/workflows/publish.yml（抜粋）
-on:
-  release:
-    types: [published]
-
-permissions:
-  id-token: write   # OIDC
-  contents: read
-
-steps:
-  - uses: actions/checkout@v4
-  - uses: astral-sh/setup-uv@v5
-  - run: uv build
-  - run: uv publish
-```
-
-Release を切るだけで PyPI に載る、という状態まで自動化できたのは、前回 graphnet-automata を uv 化したときの延長で本当に気持ちよかったです。
-
----
-
 ## まとめ
 
 物語を短くすると、こうです。
@@ -247,9 +187,8 @@ Release を切るだけで PyPI に載る、という状態まで自動化でき
 2. **転回** — 局所更新ルールを、観測データからの DAG 発見に読み替える
 3. **物理** — Gravity と V-Well でフォーク／コライダーを地形として扱う
 4. **加速** — ブール行列から連続テンソルへ。`@jit` + `lax.scan` で GPU 上 0.3 秒、PC 比おおよそ 1,600 倍
-5. **公開** — `causal-automata` として切り出し、`uv` extras と OIDC で PyPI へ
 
-セルオートマトンの「局所ルールで場が変わる」感覚は、因果発見の「独立性のパターンで矢印が立つ」感覚と、思ったより近くにありました。次に触る人が同じ興奮を共有できるように、コードもドキュメントもパッケージもそろえてあります。
+セルオートマトンの「局所ルールで場が変わる」感覚は、因果発見の「独立性のパターンで矢印が立つ」感覚と、思ったより近くにありました。実装は [causal-automata](https://github.com/kazuyamagiwa/causal-automata) にまとめてあります。
 
 ### リンク
 
