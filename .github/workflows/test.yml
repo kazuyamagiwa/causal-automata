@@ -1,0 +1,34 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Run Synthetic Data Tests (CPU)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Testing across the Python versions specified in your classifiers
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install package and dependencies
+        # Installs the package with CPU extras, plus pytest for running the harness
+        run: uv pip install --system ".[cpu]" pytest
+
+      - name: Run synthetic data tests
+        # Replace 'tests/' with the exact path to your test script if it's named differently
+        run: pytest tests/
