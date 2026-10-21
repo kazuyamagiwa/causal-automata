@@ -38,6 +38,11 @@ jax = [
     "jax>=0.4.30",
     "jaxlib>=0.4.30",
 ]
+# Alias used by CI / ``.[cpu]`` installs (same stack as jax)
+cpu = [
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+]
 # gCastle PC / GOLEM benchmarks (pulls torch)
 gcastle = [
     "gcastle>=1.0.4",
