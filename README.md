@@ -67,6 +67,7 @@ Conditioning-set sweep (CA-only, 1-hop binary, same SEM):
 ## Background & Origin
 
 `causal-automata` evolved from [graphnet-automata](https://github.com/kazuyamagiwa/graphnet-automata), a sister project exploring the application of 1D cellular automata rules to dynamic network graphs. While `graphnet-automata` focuses on generalized structural evolution and terminal-based visualization, this repository specializes those concepts into a high-performance, JAX-accelerated engine specifically designed for causal discovery and DAG generation.
+```"
 
 ## Documentation
 
