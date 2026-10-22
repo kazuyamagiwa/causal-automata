@@ -64,6 +64,10 @@ Conditioning-set sweep (CA-only, 1-hop binary, same SEM):
 | Bayesian CA (JAX, k=7) | 0.937 | 0.619 | 3.049 |
 | Bayesian CA (JAX, k=8) | 0.937 | 0.627 | 3.647 |
 
+## Background & Origin
+
+`causal-automata` evolved from [graphnet-automata](https://github.com/kazuyamagiwa/graphnet-automata), a sister project exploring the application of 1D cellular automata rules to dynamic network graphs. While `graphnet-automata` focuses on generalized structural evolution and terminal-based visualization, this repository specializes those concepts into a high-performance, JAX-accelerated engine specifically designed for causal discovery and DAG generation.
+
 ## Documentation
 
 Full docs (theory, physics, API, CLI): https://causal-automata.readthedocs.io/en/latest/
