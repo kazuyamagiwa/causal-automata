@@ -8,12 +8,12 @@ Requirements
 * Core stack: NumPy, NetworkX, scikit-learn
 * Optional: JAX (CPU, CUDA, or Metal/MPS), gCastle + PyTorch for benchmarks
 
-From PyPI (v0.2.0)
+From PyPI (v0.3.0)
 ------------------
 
 .. code-block:: bash
 
-   pip install "causal-automata==0.2.0"
+   pip install "causal-automata==0.3.0"
    pip install "causal-automata[jax]"      # portable CPU JAX
    pip install "causal-automata[cuda]"     # NVIDIA CUDA 13 JAX + Colab stack
    pip install "causal-automata[gcastle]"  # PC / GOLEM benchmarks
@@ -32,6 +32,10 @@ Editable install while developing the repo::
    pip install -e ".[jax]"
    pip install -e ".[docs]"   # Sphinx + RTD theme for local doc builds
    # or: uv pip install -e ".[jax,docs]"
+
+CI and Read the Docs both resolve extras with **``uv``**
+(``uv pip install ".[cpu]"`` in GitHub Actions;
+``.readthedocs.yaml`` uses ``method: uv`` with extras ``docs`` + ``cpu``).
 
 JAX accelerators (CPU / CUDA / MPS)
 -----------------------------------
@@ -62,21 +66,27 @@ backend branches in the package.
 
 Smoke the compile after install::
 
-   python -c "from causal_automata import warmup, __version__; print(__version__, warmup())"
+   python -c "from causal_automata import warmup, run, __version__; print(__version__, warmup())"
 
 You should see a device string such as ``jax backend=cpu ...``,
 ``gpu:...``, or an MPS/Metal device depending on the wheel.
+
+When wrapping ``step`` / ``run`` in your own jitted code, keep ``ticks``
+and ``k`` as Python integers (or bind them with ``functools.partial``).
+See :doc:`jax_static`.
 
 Build the docs locally
 ----------------------
 
 Hosted docs: https://causal-automata.readthedocs.io/en/latest/
 
-From a checkout::
+From a checkout (mirrors Read the Docs / CI)::
 
-   pip install -e ".[docs,jax]"
+   uv venv
+   uv pip install ".[docs,cpu]"
    cd docs && make html
    # open _build/html/index.html
 
 Read the Docs builds from :file:`.readthedocs.yaml` at the repository root
-using the ``docs`` and ``jax`` extras.
+using native ``uv`` (``python.install.method: uv``) with the ``docs`` and
+``cpu`` extras — the same resolver as GitHub Actions CI.

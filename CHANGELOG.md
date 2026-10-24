@@ -2,12 +2,25 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-24
+
+Physics correctness release: V-well / gravity / conditioning fixes, JIT-safe
+`run()`, and documentation for static `ticks` / `k`.
+
+### Added
+
+- **`run(A0, E0, Cov, ticks=..., k=...)`** — `jax.lax.scan` driver with
+  `static_argnames=("ticks", "k", ...)` so scan length and `(2+k)×(2+k)`
+  partial-correlation blocks stay compile-time constants.
+- **`detect_colliders`** — public explaining-away collider mask helper.
+- **Docs** — Read the Docs section on JAX concretization rules for `ticks` /
+  `k`, with `functools.partial` examples; `.readthedocs.yaml` installs via
+  native `uv` (`method: uv`, extras `docs` + `cpu`) to match GitHub Actions CI.
+- **Tests** — `tests/test_causal_fixes.py` (root stability, collider vs fork,
+  node-permutation Skeleton F1 / SHD).
 
 ### Fixed
 
-- **JIT static args** — `run(..., ticks=..., k=...)` marks `ticks` and `k` as
-  `static_argnames` so `jax.lax.scan` length and `(2+k)×(2+k)` blocks compile.
 - **V-well / explaining-away** — collider detection uses unshielded triples with
   Berkson (explaining-away) partial correlations; relative elevation targets
   replace the flat sink that clipped cascaded colliders.
