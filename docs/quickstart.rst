@@ -4,27 +4,42 @@ Quickstart
 Minimal discovery loop
 ----------------------
 
-The public API centers on a single tick function. The package exports the
-JIT-compiled JAX step as :func:`causal_automata.step` and the NumPy
-prototype as :func:`causal_automata.numpy_step`.
+The public API centers on a single tick function and an optional scan
+driver. The package exports the JIT-compiled JAX step as
+:func:`causal_automata.step`, the multi-tick :func:`causal_automata.run`,
+and the NumPy prototype as :func:`causal_automata.numpy_step`.
 
 .. code-block:: python
 
    import numpy as np
-   from causal_automata import step, warmup, default_conditioning_k, __version__
+   from causal_automata import (
+       run,
+       step,
+       warmup,
+       default_conditioning_k,
+       __version__,
+   )
    from causal_automata.bayesian_synth import prepare_synthetic_bundle
 
-   print(__version__, warmup())  # e.g. 0.2.0 + device string
+   print(__version__, warmup())  # e.g. 0.3.0 + device string
 
    n = 100
    bundle = prepare_synthetic_bundle(n=n, seed=0)
    A, E, Cov = bundle.A_init, bundle.E_init, bundle.Cov
-   k = default_conditioning_k(n)  # 3 if N≤50, 5 if N>50
+   k = default_conditioning_k(n)  # 3 if N≤50, 5 if N>50 (Python int)
 
-   for _ in range(100):
-       A, E = step(A, E, Cov, k=k, threshold_birth=0.10)
+   # Preferred: jit-scanned horizon (ticks and k are static args)
+   A, E = run(A, E, Cov, ticks=100, k=k, threshold_birth=0.10)
+
+   # Equivalent explicit loop:
+   # for _ in range(100):
+   #     A, E = step(A, E, Cov, k=k, threshold_birth=0.10)
 
    print("Predicted edges:", int((A > 0).sum()))
+
+``ticks`` and ``k`` must be ordinary Python integers. Passing traced JAX
+scalars raises ``ConcretizationTypeError`` — see :doc:`jax_static` for
+``functools.partial`` patterns.
 
 Maximum Accuracy Mode (2-hop gravity)
 -------------------------------------
@@ -32,14 +47,14 @@ Maximum Accuracy Mode (2-hop gravity)
 Pass ``multihop=True`` (CLI: ``--multihop``) so elevation drift also sees
 neighbors two hops away via :math:`A@A`::
 
-   for _ in range(100):
-       A, E = step(
-           A, E, Cov,
-           k=k,
-           threshold_birth=0.10,
-           multihop=True,
-           hop_discount=1.0,
-       )
+   A, E = run(
+       A, E, Cov,
+       ticks=100,
+       k=k,
+       threshold_birth=0.10,
+       multihop=True,
+       hop_discount=1.0,
+   )
 
 On the default N=100 SEM this lifts Directed F1 from **0.619** (1-hop)
 to **0.696** with flat wall time. See :doc:`benchmarks`.
@@ -61,15 +76,17 @@ Symbol      Meaning
 
 Each call to ``step`` applies, in order:
 
-1. **Gravity** — drop (or soft-clear) uphill edges; drift elevations toward
-   the midpoint of parent and child means. With ``multihop=True``, also
-   pull toward 2-hop means from :math:`A@A`.
-2. **V-well** — sink elevations of collider nodes detected from marginally
-   independent pairs that share neighbors.
-3. **Death / birth** — prune weak and spawn strong edges using partial
+1. **Death / birth** — prune weak and spawn strong edges using partial
    correlations conditioned on the top-``k`` union neighbors ranked by
-   :math:`|\mathrm{Cov}|`. Birth orients by elevation after the
-   :math:`|\rho|` gate.
+   :math:`|\mathrm{Cov}|`, after masking candidates with elevation below
+   both endpoints (blocks collider / M-bias in :math:`S_{i,j}`). Birth
+   orients by elevation after the :math:`|\rho|` gate.
+2. **V-well** — unshielded triples that show explaining-away (Berkson)
+   sink the middle node below its parents and gently buoy the parents.
+3. **Gravity** — drift elevations toward the midpoint of parent/child
+   means (roots anchor missing parents at ``1.0``, leaves missing children
+   at ``0.0``, isolates hold ``E``), then keep only downhill edges. With
+   ``multihop=True``, also pull toward 2-hop means from :math:`A@A`.
 
 NumPy vs JAX
 ------------
@@ -77,15 +94,17 @@ NumPy vs JAX
 .. code-block:: python
 
    from causal_automata.bayesian import step as numpy_step
-   from causal_automata.jax_core import step as jax_step
+   from causal_automata.jax_core import step as jax_step, run
 
    A1, E1 = numpy_step(A, E, Cov, threshold_birth=0.10, k=3)
    A2, E2 = jax_step(A, E, Cov, threshold_birth=0.10, k=3)
+   A3, E3 = run(A, E, Cov, ticks=100, k=3, threshold_birth=0.10)
 
-Both backends share the same core physics. Prefer JAX when ``N`` is large
-or a GPU / MPS device is available; prefer NumPy for debugging and
+Both backends share the same core physics ideas. Prefer JAX when ``N`` is
+large or a GPU / MPS device is available; prefer NumPy for debugging and
 environments without JAX. Upgrade flags (``multihop``, ``fuzzy``,
-``anneal``) are implemented on the JAX path.
+``anneal``) and the explaining-away V-well / root-stable gravity path are
+implemented on the JAX path.
 
 Synthetic end-to-end harness
 ----------------------------

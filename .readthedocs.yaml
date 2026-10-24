@@ -1,5 +1,9 @@
 # Read the Docs configuration file
 # See https://docs.readthedocs.io/en/stable/config-file/v2.html
+#
+# Dependency resolution uses ``uv`` (``method: uv`` / ``command: pip``) so the
+# docs environment matches GitHub Actions CI (``.github/workflows/test.yml``),
+# which installs with ``uv pip install ".[cpu]"``.
 
 version: 2
 
@@ -14,8 +18,11 @@ sphinx:
 
 python:
   install:
-    - method: pip
+    # Equivalent to CI: uv pip install ".[cpu]" (+ docs extras for Sphinx).
+    # Only one ``method: uv`` entry is allowed under ``python.install``.
+    - method: uv
+      command: pip
       path: .
-      extra_requirements:
+      extras:
         - docs
-        - jax
+        - cpu

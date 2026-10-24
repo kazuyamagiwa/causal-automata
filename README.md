@@ -3,15 +3,16 @@
 [![PyPI Version](https://img.shields.io/pypi/v/causal-automata.svg?cacheSeconds=3600&bust=1)](https://pypi.org/project/causal-automata/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/causal-automata.svg?cache=1)](https://pypi.org/project/causal-automata/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Documentation Status](https://readthedocs.org/projects/causal-automata/badge/?version=latest)](https://causal-automata.readthedocs.io/en/latest/)
 
 A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery.
 
-**v0.2.0** — JAX `@jit` physics, dynamic `k`, and Maximum Accuracy Mode (`--multihop`, Directed F1 **0.696** on N=100). See [CHANGELOG.md](CHANGELOG.md).
+**v0.3.0** — Corrected V-well / gravity / conditioning physics, JIT-safe `run(ticks, k)`, and Maximum Accuracy Mode (`--multihop`, Directed F1 **0.696** on N=100). See [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation
 
 ```bash
-pip install "causal-automata==0.2.0"
+pip install "causal-automata==0.3.0"
 ```
 
 With CPU JAX:
@@ -70,7 +71,7 @@ Conditioning-set sweep (CA-only, 1-hop binary, same SEM):
 
 ## Documentation
 
-Full docs (theory, physics, API, CLI): https://causal-automata.readthedocs.io/en/latest/
+Full docs (theory, physics, API, CLI, **JAX static `ticks` / `k`**): https://causal-automata.readthedocs.io/en/latest/
 
 ## How it works — CA physics + V-well
 
@@ -80,7 +81,7 @@ State is a binary DAG adjacency `A`, node elevations `E ∈ [0,1]`, and a fixed 
 2. **V-structure gravity well** — unshielded triples `(i, k, j)` that show explaining-away (Berkson): marginally weak `|ρ_{ij}|` but stronger `|ρ_{ij|k}|` mark middle node `k` as a **collider**. Collider elevations are pushed below `min(E_i, E_j) − 0.15`; parents are gently buoyed — the classic V-structure `i → k ← j`.
 3. **Gravity** — drift elevations toward the midpoint of parent/child means (roots anchor missing parents at `1.0`, leaves missing children at `0.0`, isolates hold `E`), then keep only downhill edges with a tiny index tie-break. With **`--multihop`**, that drift also sees 2-hop neighbors from `A @ A` (discounted pull) to help break Markov-equivalence ties.
 
-The pure functional JAX port (`jax_core.step` / `jax_core.run`) is `@jax.jit`-compiled; `run(..., ticks=..., k=...)` marks `ticks` and `k` as static so `jax.lax.scan` length and `(2+k)×(2+k)` partial-corr blocks stay compile-time constants.
+The pure functional JAX port (`jax_core.step` / `jax_core.run`) is `@jax.jit`-compiled; `run(..., ticks=..., k=...)` marks `ticks` and `k` as **static** so `jax.lax.scan` length and `(2+k)×(2+k)` partial-corr blocks stay compile-time constants. See the docs page [JAX static arguments](https://causal-automata.readthedocs.io/en/latest/jax_static.html) for `functools.partial` patterns that avoid `ConcretizationTypeError`.
 
 ## Run
 
@@ -105,7 +106,7 @@ python -m causal_automata.benchmark --smoke   # device checks + GOLEM init only
 Smoke the JAX compile:
 
 ```bash
-python -c "from causal_automata import warmup; print(warmup())"
+python -c "from causal_automata import warmup, run; print(warmup())"
 ```
 
 ## Package layout
@@ -116,10 +117,11 @@ causal-automata/
 │   ├── __init__.py
 │   ├── bayesian.py          # NumPy Bayesian CA step
 │   ├── bayesian_synth.py    # Synthetic linear-DAG harness
-│   ├── jax_core.py          # JAX @jit port of step
+│   ├── jax_core.py          # JAX @jit step / run
 │   └── benchmark.py         # vs gCastle PC / GOLEM
 ├── docs/                    # Sphinx / Read the Docs
-├── .readthedocs.yaml
+├── tests/
+├── .readthedocs.yaml        # uv-based docs install (matches CI)
 ├── pyproject.toml
 ├── README.md
 └── NOTICE

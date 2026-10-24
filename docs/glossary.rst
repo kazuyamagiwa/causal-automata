@@ -32,9 +32,12 @@ Elevation
   orient edges downhill and forbid cycles.
 
 V-well / collider / sink
-  A V-structure :math:`i \to k \leftarrow j`. Observing the common
-  effect opens dependence between otherwise independent causes; the
-  automaton sinks :math:`k`’s elevation to prefer arrows into it.
+  A V-structure :math:`i \to k \leftarrow j`. Unshielded triples that
+  show explaining-away (Berkson) — marginally weak :math:`|\rho_{ij}|`
+  but stronger :math:`|\rho_{ij\mid k}|` — mark middle node :math:`k` as
+  a collider. The automaton pushes :math:`E_k` below
+  :math:`\min(E_i, E_j)` (and gently buoys the parents) so later birth
+  prefers arrows into the sink.
 
 Partial correlation (:math:`\rho`)
   Linear-Gaussian proxy for CMI used in
