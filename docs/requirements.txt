@@ -1,5 +1,7 @@
 # Fallback pin set for local ``pip install -r docs/requirements.txt``.
-# Read the Docs installs the project via ``.readthedocs.yaml`` extras.
+# Prefer the same path as CI / Read the Docs:
+#   uv pip install ".[docs,cpu]"
+# Read the Docs uses native uv via ``.readthedocs.yaml`` (extras docs + cpu).
 sphinx>=7.0
 sphinx-rtd-theme>=2.0
 myst-parser>=2.0

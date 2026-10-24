@@ -65,27 +65,31 @@ False transitive edges (ice cream ↔ sharks) are erased.
 Implemented tick (code)
 -----------------------
 
-The NumPy prototype (:func:`causal_automata.bayesian.step`) and the JAX
-port (:func:`causal_automata.jax_core.step`) share one operational
-physics adapted for batched partial correlation:
+The JAX port (:func:`causal_automata.jax_core.step`,
+:func:`causal_automata.jax_core.run`) implements one operational
+physics adapted for batched partial correlation. Each tick runs in this
+order:
 
-1. **Gravity (topography)** — Keep only downhill edges
-   (:math:`E_i > E_j`). Drift each elevation toward the midpoint of its
-   parent and child means (learning rate). Isolated sides use the node's
-   own elevation (no pull).
-2. **V-structure gravity well** — Absent undirected pairs that share
-   neighbors and are marginally independent
-   (:math:`|\rho| < \tau_{\mathrm{death}}` with empty :math:`Z`) mark
-   shared neighbors as colliders. Those elevations sink by
-   ``2 * learning_rate``, then clip to :math:`[0, 1]`. Later birth
-   prefers arrows into the collider.
-3. **Death** — For existing edges, estimate partial correlation given the
+1. **Death** — For existing edges, estimate partial correlation given the
    top-``k`` union neighbors ranked by
-   :math:`\max(|\mathrm{Cov}_{m i}|, |\mathrm{Cov}_{m j}|)`. Kill when
+   :math:`\max(|\mathrm{Cov}_{m i}|, |\mathrm{Cov}_{m j}|)`, after masking
+   candidates with elevation below both endpoints (blocks common
+   descendants / M-bias in :math:`S_{i,j}`). Kill when
    :math:`|\rho| < \tau_{\mathrm{death}}`.
-4. **Birth** — For all absent undirected pairs, birth when
+2. **Birth** — For all absent undirected pairs, birth when
    :math:`|\rho| > \tau_{\mathrm{birth}}`, orienting by elevation
-   (equal elevation → no-op). Re-apply downhill clear after sinks.
+   (equal elevation → no-op).
+3. **V-structure gravity well** — Unshielded triples
+   :math:`(i, k, j)` that show explaining-away (Berkson): marginally weak
+   :math:`|\rho_{ij}|` but stronger :math:`|\rho_{ij\mid k}|` mark middle
+   node :math:`k` as a collider. Collider elevations are pushed toward
+   :math:`\min(E_i, E_j) - 0.15`; parents are gently buoyed.
+4. **Gravity (topography)** — Drift each elevation toward the midpoint of
+   parent and child means. Roots (``in_deg == 0``) anchor the missing
+   parent reference at ``1.0``; leaves (``out_deg == 0``) anchor missing
+   children at ``0.0``; isolates hold ``E``. Then keep only downhill edges
+   with a tiny index tie-break so clipped nodes at ``0.0`` / ``1.0`` never
+   tie.
 
 Default API thresholds are ``threshold_death=0.05``,
 ``threshold_birth=0.15``, ``k=2``, ``learning_rate=0.1``. The synthetic /
@@ -93,6 +97,9 @@ benchmark CLIs typically use ``threshold_birth=0.10`` and a
 **scale-aware** ``k`` (``3`` if :math:`N\le 50`, ``5`` if :math:`N>50`).
 Optional ``multihop=True`` adds discounted 2-hop elevation pull from
 :math:`A@A` (Maximum Accuracy Mode).
+
+``ticks`` (scan length in ``run``) and ``k`` (block size ``2+k``) are JIT
+**static** arguments — see :doc:`jax_static`.
 
 GPU / accelerator matrix computation
 ------------------------------------
@@ -106,10 +113,10 @@ yields precision matrices whose off-diagonals give :math:`\rho`.
 Component     Structure                               JAX / NumPy operation
 ============= ======================================= =====================================
 State         :math:`N \times N`                      Array update / ``jax.lax``-friendly
-Gravity       Downhill mask + optional :math:`A@A`    Element-wise / ``matmul``
-V-wells       Pair + shared-neighbor masks            Boolean reductions; elevation sinks
 Death / birth Ranked :math:`Z`, :math:`\rho`          Batched ``linalg.inv`` ``(2+k)``
-DAG law       Elevations                              Hard downhill constraint
+V-wells       Unshielded explaining-away triples      Boolean reductions; relative sinks
+Gravity       Parent/child means + downhill mask      Element-wise / optional ``A@A``
+DAG law       Elevations                              Hard downhill + tie-break
 ============= ======================================= =====================================
 
 ``@jax.jit`` removes Python loop overhead so hundreds of ticks over
