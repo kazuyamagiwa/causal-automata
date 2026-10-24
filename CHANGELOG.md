@@ -2,6 +2,20 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **JIT static args** — `run(..., ticks=..., k=...)` marks `ticks` and `k` as
+  `static_argnames` so `jax.lax.scan` length and `(2+k)×(2+k)` blocks compile.
+- **V-well / explaining-away** — collider detection uses unshielded triples with
+  Berkson (explaining-away) partial correlations; relative elevation targets
+  replace the flat sink that clipped cascaded colliders.
+- **Root / isolate gravity** — missing parents anchor at `1.0`, missing children
+  at `0.0`; isolates hold `E`; downhill projection uses index tie-breaks.
+- **Conditioning M-bias** — top-`k` candidates with `E[z] < min(E[i], E[j])`
+  are masked out of `S_{i,j}`. Tick order is now death → birth → v_well → gravity.
+
 ## [0.2.0] — 2026-10-20
 
 Milestone release: JAX-compiled CA physics, N=100 scaling, and Maximum Accuracy Mode.
