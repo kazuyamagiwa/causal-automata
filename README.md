@@ -76,11 +76,11 @@ Full docs (theory, physics, API, CLI): https://causal-automata.readthedocs.io/en
 
 State is a binary DAG adjacency `A`, node elevations `E ∈ [0,1]`, and a fixed empirical covariance `Cov` from continuous observations. Each tick is a local cellular update:
 
-1. **Gravity** — keep only downhill edges (`E[parent] > E[child]`), then drift elevations toward the midpoint of parent/child means. With **`--multihop`**, that drift also sees 2-hop neighbors from `A @ A` (discounted pull) to help break Markov-equivalence ties.
-2. **V-structure gravity well** — absent undirected pairs that share neighbors and are marginally independent (`|ρ|` below the death threshold with empty conditioning set) mark shared neighbors as **colliders**. Those elevations are sunk (`E -= 2·lr`), so later birth prefers arrows into the collider — the classic V-structure `i → k ← j`.
-3. **Death / birth** — kill weak edges and birth strong ones using partial correlations conditioned on the top-`k` union neighbors ranked by `|Cov|`. Birth orients by elevation after the `|ρ|` gate. Optional **`--fuzzy`** keeps continuous weights in `[0, 1]` and binarizes only after the final tick.
+1. **Death / birth** — prune weak edges and add strong ones using partial correlations conditioned on the top-`k` union neighbors ranked by `|Cov|`, after masking candidates with elevation below both endpoints (blocks collider / M-bias in `S_{i,j}`). Birth orients by elevation after the `|ρ|` gate. Optional **`--fuzzy`** keeps continuous weights in `[0, 1]` and binarizes only after the final tick.
+2. **V-structure gravity well** — unshielded triples `(i, k, j)` that show explaining-away (Berkson): marginally weak `|ρ_{ij}|` but stronger `|ρ_{ij|k}|` mark middle node `k` as a **collider**. Collider elevations are pushed below `min(E_i, E_j) − 0.15`; parents are gently buoyed — the classic V-structure `i → k ← j`.
+3. **Gravity** — drift elevations toward the midpoint of parent/child means (roots anchor missing parents at `1.0`, leaves missing children at `0.0`, isolates hold `E`), then keep only downhill edges with a tiny index tie-break. With **`--multihop`**, that drift also sees 2-hop neighbors from `A @ A` (discounted pull) to help break Markov-equivalence ties.
 
-The NumPy prototype (`bayesian.step`) and the pure functional JAX port (`jax_core.step`, `@jax.jit`) share this physics.
+The pure functional JAX port (`jax_core.step` / `jax_core.run`) is `@jax.jit`-compiled; `run(..., ticks=..., k=...)` marks `ticks` and `k` as static so `jax.lax.scan` length and `(2+k)×(2+k)` partial-corr blocks stay compile-time constants.
 
 ## Run
 
