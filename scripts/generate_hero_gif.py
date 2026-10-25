@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Generate the README hero GIF: elevation field E_t + DAG convergence.
+"""Generate README hero animation assets (MP4 + poster + GIF).
 
 Records a short JAX CA trajectory on a clean 12-node hierarchical DAG and
-renders a two-panel animation to ``assets/elevation_convergence.gif``.
+writes:
+
+* ``assets/elevation_convergence.mp4`` — primary hero (plays on iPhone)
+* ``assets/elevation_convergence_poster.jpg`` — tappable poster with play cue
+* ``assets/elevation_convergence.gif`` — desktop fallback
+
+GitHub's mobile site often freezes animated GIFs (battery / accessibility),
+including third-party READMEs. An H.264 MP4 opened from a poster link is the
+reliable cross-device path.
 
 Usage::
 
@@ -11,6 +19,8 @@ Usage::
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,7 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import animation
 from matplotlib.patches import FancyArrowPatch
-from PIL import Image, ImageSequence
+from PIL import Image, ImageDraw, ImageFont, ImageSequence
 
 # Repo root on sys.path so `causal_automata` resolves without an editable install.
 _ROOT = Path(__file__).resolve().parents[1]
@@ -49,13 +59,17 @@ K = 3
 FPS = 10
 DPI = 110
 FIGSIZE = (11, 5)
-OUT_PATH = _ROOT / "assets" / "elevation_convergence.gif"
+OUT_GIF = _ROOT / "assets" / "elevation_convergence.gif"
+OUT_MP4 = _ROOT / "assets" / "elevation_convergence.mp4"
+OUT_POSTER = _ROOT / "assets" / "elevation_convergence_poster.jpg"
 BG = "#0f172a"
 FG = "#e2e8f0"
 MUTED = "#94a3b8"
 TP_COLOR = "#10b981"
 FP_COLOR = "#ef4444"
-MAX_BYTES = 5 * 1024 * 1024
+MAX_GIF_BYTES = 5 * 1024 * 1024
+MAX_MP4_BYTES = 10 * 1024 * 1024
+POSTER_FRAME_INDEX = 20  # mid-convergence still for the tappable poster
 
 # 12-node hierarchy (logical order, before random index permutation):
 #   3 roots (0,1,2) → 4 intermediates (3,4,6,7) → 3 colliders (5,8,9) → 2 sinks (10,11)
@@ -224,59 +238,146 @@ def _force_full_frame_delta(im: Image.Image, frame_idx: int) -> Image.Image:
     return out
 
 
-def _save_safari_safe_gif(
-    src_path: Path,
-    dest_path: Path,
-    *,
-    fps: int = FPS,
-    hold_final: int = HOLD_FINAL,
-) -> None:
-    """Re-encode a GIF so Mobile Safari actually animates it.
-
-    Matplotlib's ``PillowWriter`` writes *partial* frames with disposal=0 and
-    transparency. Safari (esp. iOS) often shows only the first frame for that
-    pattern. Composite every frame to full opaque RGB and re-save with
-    ``disposal=1``, ``optimize=False``, full-canvas frames, and an infinite loop.
-    See: https://github.com/python-pillow/Pillow/issues/8072
-    """
-    duration_ms = max(int(round(1000 / fps)), 1)
+def _load_rgb_frames(src_path: Path, *, hold_final: int) -> list[Image.Image]:
+    """Composite PillowWriter output into full RGB frames (+ end hold)."""
     im = Image.open(src_path)
     frames: list[Image.Image] = []
     for frame in ImageSequence.Iterator(im):
-        # ``convert("RGB")`` after seek composites disposal/partial updates.
         frames.append(frame.convert("RGB"))
     if not frames:
         raise RuntimeError(f"no frames decoded from {src_path}")
-
-    # Discrete end-hold frames (Pillow coalesces identical consecutive frames).
     last = frames[-1]
     frames.extend(last.copy() for _ in range(hold_final))
-    frames = [_force_full_frame_delta(fr, i) for i, fr in enumerate(frames)]
+    return frames
 
-    durations = [duration_ms] * len(frames)
+
+def _save_safari_safe_gif(
+    frames: list[Image.Image],
+    dest_path: Path,
+    *,
+    fps: int = FPS,
+) -> None:
+    """Write a full-canvas opaque GIF (disposal=1) for desktop browsers."""
+    duration_ms = max(int(round(1000 / fps)), 1)
+    stamped = [_force_full_frame_delta(fr, i) for i, fr in enumerate(frames)]
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    frames[0].save(
+    stamped[0].save(
         dest_path,
         format="GIF",
         save_all=True,
-        append_images=frames[1:],
-        duration=durations,
+        append_images=stamped[1:],
+        duration=[duration_ms] * len(stamped),
         loop=0,
-        disposal=1,  # "do not dispose" — Safari-safe (Pillow #8072)
+        disposal=1,
         optimize=False,
     )
 
 
-def render_gif(
+def _save_mp4(frames: list[Image.Image], dest_path: Path, *, fps: int = FPS) -> None:
+    """Encode H.264 MP4 via ffmpeg (widest iPhone / GitHub playback)."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg not found on PATH (required for hero MP4)")
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    frame_dir = dest_path.parent / ".hero_frames_tmp"
+    if frame_dir.exists():
+        shutil.rmtree(frame_dir)
+    frame_dir.mkdir(parents=True)
+
+    try:
+        for i, fr in enumerate(frames):
+            fr.save(frame_dir / f"frame_{i:04d}.png")
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            str(fps),
+            "-i",
+            str(frame_dir / "frame_%04d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-an",
+            str(dest_path),
+        ]
+        subprocess.run(cmd, check=True)
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+
+
+def _save_poster(
+    frames: list[Image.Image],
+    dest_path: Path,
+    *,
+    frame_index: int = POSTER_FRAME_INDEX,
+) -> None:
+    """Still frame + play affordance for the README (tap → MP4 on iPhone)."""
+    idx = int(np.clip(frame_index, 0, len(frames) - 1))
+    base = frames[idx].convert("RGBA")
+    w, h = base.size
+    overlay = Image.new("RGBA", (w, h), (15, 23, 42, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Dim vignette so the play control reads clearly on any frame.
+    draw.rectangle((0, 0, w, h), fill=(15, 23, 42, 90))
+
+    cx, cy = w // 2, h // 2
+    r = max(48, min(w, h) // 8)
+    draw.ellipse(
+        (cx - r, cy - r, cx + r, cy + r),
+        fill=(15, 23, 42, 200),
+        outline=(226, 232, 240, 230),
+        width=3,
+    )
+    # Play triangle
+    tri = [
+        (cx - r // 3, cy - r // 2),
+        (cx - r // 3, cy + r // 2),
+        (cx + r // 2, cy),
+    ]
+    draw.polygon(tri, fill=(226, 232, 240, 240))
+
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", size=max(18, w // 45))
+    except OSError:
+        font = ImageFont.load_default()
+    caption = "Tap to play  ·  MP4 works on iPhone"
+    # Anchor text near the bottom center.
+    bbox = draw.textbbox((0, 0), caption, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    tx, ty = (w - tw) // 2, h - th - max(16, h // 30)
+    pad = 8
+    draw.rounded_rectangle(
+        (tx - pad, ty - pad // 2, tx + tw + pad, ty + th + pad // 2),
+        radius=6,
+        fill=(15, 23, 42, 210),
+    )
+    draw.text((tx, ty), caption, fill=(226, 232, 240, 255), font=font)
+
+    composed = Image.alpha_composite(base, overlay).convert("RGB")
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    composed.save(dest_path, format="JPEG", quality=88, optimize=True)
+
+
+def render_animation(
     A_hist: np.ndarray,
     E_hist: np.ndarray,
     A_true: np.ndarray,
     *,
-    out_path: Path = OUT_PATH,
+    out_gif: Path = OUT_GIF,
+    out_mp4: Path = OUT_MP4,
+    out_poster: Path = OUT_POSTER,
     hold_final: int = HOLD_FINAL,
     fps: int = FPS,
-) -> Path:
-    """Two-panel dark-theme animation → GIF via PillowWriter."""
+) -> tuple[Path, Path, Path]:
+    """Two-panel dark-theme animation → GIF + MP4 + poster."""
     shd, sk_f1, dir_f1 = compute_metrics(A_hist, A_true)
     n_ticks = A_hist.shape[0]  # ticks+1 (includes t=0)
 
@@ -457,7 +558,7 @@ def render_gif(
         )
         return (scat, tick_text, shd_line, sk_line, dir_line, *elev_lines, *labels_txt)
 
-    # Render ticks only here; Safari-safe re-encode appends the end hold.
+    # Render ticks only here; exporters append the end hold.
     anim = animation.FuncAnimation(
         fig,
         update,
@@ -467,15 +568,22 @@ def render_gif(
         blit=False,
     )
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = out_path.with_suffix(".tmp.gif")
+    out_gif.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_gif.with_suffix(".tmp.gif")
     writer = animation.PillowWriter(fps=fps)
     anim.save(str(tmp_path), writer=writer, dpi=DPI)
     plt.close(fig)
 
-    _save_safari_safe_gif(tmp_path, out_path, fps=fps, hold_final=hold_final)
+    frames = _load_rgb_frames(tmp_path, hold_final=hold_final)
     tmp_path.unlink(missing_ok=True)
-    return out_path
+
+    print(f"  writing GIF  → {out_gif}")
+    _save_safari_safe_gif(frames, out_gif, fps=fps)
+    print(f"  writing MP4  → {out_mp4}")
+    _save_mp4(frames, out_mp4, fps=fps)
+    print(f"  writing poster → {out_poster}")
+    _save_poster(frames, out_poster)
+    return out_gif, out_mp4, out_poster
 
 
 def main() -> int:
@@ -497,16 +605,22 @@ def main() -> int:
         f"std={E_hist[-1].std():.3f}"
     )
 
-    print(f"Rendering GIF → {OUT_PATH} …")
-    path = render_gif(A_hist, E_hist, A_true)
-    size = path.stat().st_size
-    print(f"  wrote {path} ({size / 1024:.1f} KiB)")
-    if size > MAX_BYTES:
-        print(
-            f"WARNING: GIF is {size / MAX_BYTES:.2f}× the 5 MB GitHub inline limit",
-            file=sys.stderr,
-        )
-        return 1
+    print("Rendering hero assets (GIF + MP4 + poster)…")
+    gif_path, mp4_path, poster_path = render_animation(A_hist, E_hist, A_true)
+    for label, path, limit in (
+        ("GIF", gif_path, MAX_GIF_BYTES),
+        ("MP4", mp4_path, MAX_MP4_BYTES),
+        ("poster", poster_path, MAX_MP4_BYTES),
+    ):
+        size = path.stat().st_size
+        print(f"  {label}: {path} ({size / 1024:.1f} KiB)")
+        if size > limit:
+            print(
+                f"WARNING: {label} is {size / limit:.2f}× the size budget "
+                f"({limit / 1024 / 1024:.0f} MB)",
+                file=sys.stderr,
+            )
+            return 1
     print("Done.")
     return 0
 
