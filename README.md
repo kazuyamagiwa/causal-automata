@@ -12,25 +12,19 @@ Classical constraint-based causal discovery (PC / Meek orientation rules) relies
 
 ## Hero Animation
 
-GitHub freezes animated GIFs on many iPhones (site-wide — not just this repo). The hero below is a **tappable MP4 poster** so the demo plays on mobile Safari.
-
 <p align="center">
-  <a href="assets/elevation_convergence.mp4">
-    <img src="assets/elevation_convergence_poster.jpg" alt="Tap to play: elevation field E_t and DAG convergence" width="850"/>
-  </a>
+  <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence" width="850"/>
 </p>
 
 <p align="center">
-  <a href="assets/elevation_convergence.mp4"><strong>▶ Play hero animation (MP4)</strong></a>
-  ·
-  <a href="assets/elevation_convergence.gif">GIF fallback</a>
+  <a href="assets/elevation_convergence.mp4">▶ MP4 (iPhone)</a>
 </p>
 
 - **Downhill Acyclicity by Construction (\(O(N^2)\)):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG on every tick without \(O(N^3)\) matrix exponential penalties.
 - **Explaining-Away V-Wells:** Unshielded colliders (\(i \to k \leftarrow j\)) are detected via Berkson's effect (\(|\rho_{i,j \mid k}| > |\rho_{i,j}|\)) and pulled below their parents.
 - **Harmonic Gravity Propagation:** Local elevation diffusion (\(E_i \to \frac{1}{2}(\bar{E}_{\mathrm{pa}} + \bar{E}_{\mathrm{ch}})\)) acts as a continuous, parallel relaxation of Meek's orientation rules.
 
-Regenerate the hero assets locally (needs `ffmpeg` for the MP4):
+Regenerate the hero assets locally (GIF + MP4 + poster; needs `ffmpeg` for the MP4):
 
 ```bash
 python scripts/generate_hero_gif.py
