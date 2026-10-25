@@ -139,7 +139,9 @@ def run_trajectory(
             Cov_j,
             k=k,
             threshold_birth=0.12,
-            learning_rate=0.15,
+            # Slower than the default 0.1 so the hero GIF lets viewers watch
+            # coral FPs die off and nodes glide into strata over ~35–40 ticks.
+            learning_rate=0.08,
             multihop=True,
         )
         return (A_next, E_next), (A_next, E_next)
