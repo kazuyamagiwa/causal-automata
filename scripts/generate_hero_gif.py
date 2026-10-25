@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Generate README convergence-animation assets (GIF + MP4 + poster).
+"""Generate README convergence-animation assets (GIF + MP4).
 
 Records a short JAX CA trajectory on a clean 12-node hierarchical DAG and
 writes:
 
 * ``assets/elevation_convergence.gif`` — primary README embed
 * ``assets/elevation_convergence.mp4`` — iPhone / reduced-motion fallback
-* ``assets/elevation_convergence_poster.jpg`` — still with play cue (optional)
 
 GitHub often freezes animated GIFs when accessibility reduced-motion is on.
 The MP4 is a tap-to-play fallback, not the main embed.
@@ -30,7 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import animation
 from matplotlib.patches import FancyArrowPatch
-from PIL import Image, ImageDraw, ImageFont, ImageSequence
+from PIL import Image, ImageSequence
 
 # Repo root on sys.path so `causal_automata` resolves without an editable install.
 _ROOT = Path(__file__).resolve().parents[1]
@@ -60,7 +59,6 @@ DPI = 110
 FIGSIZE = (11, 5)
 OUT_GIF = _ROOT / "assets" / "elevation_convergence.gif"
 OUT_MP4 = _ROOT / "assets" / "elevation_convergence.mp4"
-OUT_POSTER = _ROOT / "assets" / "elevation_convergence_poster.jpg"
 BG = "#0f172a"
 FG = "#e2e8f0"
 MUTED = "#94a3b8"
@@ -68,7 +66,6 @@ TP_COLOR = "#10b981"
 FP_COLOR = "#ef4444"
 MAX_GIF_BYTES = 5 * 1024 * 1024
 MAX_MP4_BYTES = 10 * 1024 * 1024
-POSTER_FRAME_INDEX = 20  # mid-convergence still for the tappable poster
 
 # 12-node hierarchy (logical order, before random index permutation):
 #   3 roots (0,1,2) → 4 intermediates (3,4,6,7) → 3 colliders (5,8,9) → 2 sinks (10,11)
@@ -311,60 +308,6 @@ def _save_mp4(frames: list[Image.Image], dest_path: Path, *, fps: int = FPS) -> 
         shutil.rmtree(frame_dir, ignore_errors=True)
 
 
-def _save_poster(
-    frames: list[Image.Image],
-    dest_path: Path,
-    *,
-    frame_index: int = POSTER_FRAME_INDEX,
-) -> None:
-    """Still frame + play affordance for the README (tap → MP4 on iPhone)."""
-    idx = int(np.clip(frame_index, 0, len(frames) - 1))
-    base = frames[idx].convert("RGBA")
-    w, h = base.size
-    overlay = Image.new("RGBA", (w, h), (15, 23, 42, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    # Dim vignette so the play control reads clearly on any frame.
-    draw.rectangle((0, 0, w, h), fill=(15, 23, 42, 90))
-
-    cx, cy = w // 2, h // 2
-    r = max(48, min(w, h) // 8)
-    draw.ellipse(
-        (cx - r, cy - r, cx + r, cy + r),
-        fill=(15, 23, 42, 200),
-        outline=(226, 232, 240, 230),
-        width=3,
-    )
-    # Play triangle
-    tri = [
-        (cx - r // 3, cy - r // 2),
-        (cx - r // 3, cy + r // 2),
-        (cx + r // 2, cy),
-    ]
-    draw.polygon(tri, fill=(226, 232, 240, 240))
-
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", size=max(18, w // 45))
-    except OSError:
-        font = ImageFont.load_default()
-    caption = "Tap to play  ·  MP4 works on iPhone"
-    # Anchor text near the bottom center.
-    bbox = draw.textbbox((0, 0), caption, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx, ty = (w - tw) // 2, h - th - max(16, h // 30)
-    pad = 8
-    draw.rounded_rectangle(
-        (tx - pad, ty - pad // 2, tx + tw + pad, ty + th + pad // 2),
-        radius=6,
-        fill=(15, 23, 42, 210),
-    )
-    draw.text((tx, ty), caption, fill=(226, 232, 240, 255), font=font)
-
-    composed = Image.alpha_composite(base, overlay).convert("RGB")
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    composed.save(dest_path, format="JPEG", quality=88, optimize=True)
-
-
 def render_animation(
     A_hist: np.ndarray,
     E_hist: np.ndarray,
@@ -372,11 +315,10 @@ def render_animation(
     *,
     out_gif: Path = OUT_GIF,
     out_mp4: Path = OUT_MP4,
-    out_poster: Path = OUT_POSTER,
     hold_final: int = HOLD_FINAL,
     fps: int = FPS,
-) -> tuple[Path, Path, Path]:
-    """Two-panel dark-theme animation → GIF + MP4 + poster."""
+) -> tuple[Path, Path]:
+    """Two-panel dark-theme animation → GIF + MP4."""
     shd, sk_f1, dir_f1 = compute_metrics(A_hist, A_true)
     n_ticks = A_hist.shape[0]  # ticks+1 (includes t=0)
 
@@ -580,9 +522,7 @@ def render_animation(
     _save_safari_safe_gif(frames, out_gif, fps=fps)
     print(f"  writing MP4  → {out_mp4}")
     _save_mp4(frames, out_mp4, fps=fps)
-    print(f"  writing poster → {out_poster}")
-    _save_poster(frames, out_poster)
-    return out_gif, out_mp4, out_poster
+    return out_gif, out_mp4
 
 
 def main() -> int:
@@ -604,12 +544,11 @@ def main() -> int:
         f"std={E_hist[-1].std():.3f}"
     )
 
-    print("Rendering animation assets (GIF + MP4 + poster)…")
-    gif_path, mp4_path, poster_path = render_animation(A_hist, E_hist, A_true)
+    print("Rendering animation assets (GIF + MP4)…")
+    gif_path, mp4_path = render_animation(A_hist, E_hist, A_true)
     for label, path, limit in (
         ("GIF", gif_path, MAX_GIF_BYTES),
         ("MP4", mp4_path, MAX_MP4_BYTES),
-        ("poster", poster_path, MAX_MP4_BYTES),
     ):
         size = path.stat().st_size
         print(f"  {label}: {path} ({size / 1024:.1f} KiB)")

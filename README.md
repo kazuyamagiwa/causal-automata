@@ -26,7 +26,7 @@ Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a 
 - **Explaining-Away V-Wells:** Unshielded colliders (\(i \to k \leftarrow j\)) are detected via Berkson's effect (\(|\rho_{i,j \mid k}| > |\rho_{i,j}|\)) and pulled below their parents.
 - **Harmonic Gravity Propagation:** Local elevation diffusion (\(E_i \to \frac{1}{2}(\bar{E}_{\mathrm{pa}} + \bar{E}_{\mathrm{ch}})\)) acts as a continuous, parallel relaxation of Meek's orientation rules.
 
-Regenerate the animation assets locally (GIF + MP4 + poster; needs `ffmpeg` for the MP4):
+Regenerate the animation assets locally (GIF + MP4; needs `ffmpeg` for the MP4):
 
 ```bash
 python scripts/generate_hero_gif.py
@@ -161,11 +161,10 @@ causal-automata/
 │   ├── jax_core.py          # JAX @jit step / run
 │   └── benchmark.py         # vs gCastle PC / GOLEM
 ├── scripts/
-│   └── generate_hero_gif.py # README convergence GIF + MP4 + poster
+│   └── generate_hero_gif.py # README convergence GIF + MP4
 ├── assets/
-│   ├── elevation_convergence.mp4
-│   ├── elevation_convergence_poster.jpg
-│   └── elevation_convergence.gif
+│   ├── elevation_convergence.gif
+│   └── elevation_convergence.mp4
 ├── docs/                    # Sphinx / Read the Docs
 ├── tests/
 ├── .readthedocs.yaml
