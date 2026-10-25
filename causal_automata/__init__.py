@@ -6,6 +6,7 @@ from causal_automata.jax_core import (
     binarize,
     detect_colliders,
     device_info,
+    enable_x64,
     run,
     step,
     warmup,
@@ -16,6 +17,7 @@ __all__ = [
     "run",
     "numpy_step",
     "device_info",
+    "enable_x64",
     "warmup",
     "binarize",
     "detect_colliders",
@@ -23,4 +25,4 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

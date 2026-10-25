@@ -1,12 +1,12 @@
 [project]
 name = "causal-automata"
-version = "0.3.0"
+version = "0.3.1"
 description = "A blazing-fast, JAX-accelerated Cellular Automaton engine for causal discovery."
 readme = "README.md"
 authors = [
     { name = "Masakazu Yamagiwa", email = "myamagiwa@gmail.com" }
 ]
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",

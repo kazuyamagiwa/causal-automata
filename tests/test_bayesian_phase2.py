@@ -40,7 +40,10 @@ def test_prepare_synthetic_bundle_shapes_and_reproducibility() -> None:
 
 
 def test_run_phase2_recovers_seed0_dag() -> None:
-    result = run_phase2(n=N, seed=0, ticks=100, backend="numpy")
+    # Unpermuted motif matches the historical Phase-2 recovery contract.
+    result = run_phase2(
+        n=N, seed=0, ticks=100, backend="numpy", permute_nodes=False
+    )
     assert result.backend == "numpy"
     assert result.metrics_final.true_edges == len(TRUTH_EDGES)
     # Seed 0 recovers all true edges with high directed / skeleton F1.
@@ -53,7 +56,9 @@ def test_run_phase2_recovers_seed0_dag() -> None:
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
 def test_run_phase2_improves_or_holds_directed_f1(seed: int) -> None:
-    result = run_phase2(n=N, seed=seed, ticks=100, backend="numpy")
+    result = run_phase2(
+        n=N, seed=seed, ticks=100, backend="numpy", permute_nodes=False
+    )
     assert result.metrics_final.f1 >= result.metrics_init.f1 - 1e-9
     assert result.skeleton_final.f1 >= 0.5
     assert result.metrics_final.tp >= 4

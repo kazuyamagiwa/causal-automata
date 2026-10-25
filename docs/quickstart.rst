@@ -76,17 +76,18 @@ Symbol      Meaning
 
 Each call to ``step`` applies, in order:
 
-1. **Death / birth** — prune weak and spawn strong edges using partial
+1. **Gravity** — raw downhill projection, then local-margin elevation
+   drift (roots sit just above children, leaves just below parents;
+   isolates hold ``E``). Optional ``multihop=True`` also pulls toward
+   2-hop means from :math:`A@A`.
+2. **V-well** — lowers elevations of shared neighbors of marginally
+   independent pairs (collider cue). This updates ``E`` only; edges are
+   re-oriented by later birth / downhill projection.
+3. **Death / birth** — prune weak and spawn strong edges using partial
    correlations conditioned on the top-``k`` union neighbors ranked by
-   :math:`|\mathrm{Cov}|`, after masking candidates with elevation below
-   both endpoints (blocks collider / M-bias in :math:`S_{i,j}`). Birth
-   orients by elevation after the :math:`|\rho|` gate.
-2. **V-well** — unshielded triples that show explaining-away (Berkson)
-   sink the middle node below its parents and gently buoy the parents.
-3. **Gravity** — drift elevations toward the midpoint of parent/child
-   means (roots anchor missing parents at ``1.0``, leaves missing children
-   at ``0.0``, isolates hold ``E``), then keep only downhill edges. With
-   ``multihop=True``, also pull toward 2-hop means from :math:`A@A`.
+   absolute **correlation** :math:`|R|` (not raw ``|Cov|``). Birth
+   orients with a deterministic elevation tie-break so nodes clipped at
+   the same bound still get a direction.
 
 NumPy vs JAX
 ------------
@@ -100,11 +101,10 @@ NumPy vs JAX
    A2, E2 = jax_step(A, E, Cov, threshold_birth=0.10, k=3)
    A3, E3 = run(A, E, Cov, ticks=100, k=3, threshold_birth=0.10)
 
-Both backends share the same core physics ideas. Prefer JAX when ``N`` is
-large or a GPU / MPS device is available; prefer NumPy for debugging and
-environments without JAX. Upgrade flags (``multihop``, ``fuzzy``,
-``anneal``) and the explaining-away V-well / root-stable gravity path are
-implemented on the JAX path.
+Both backends share the **same** core physics (parity-tested on the
+Phase-2 N=10 SEM). Prefer JAX when ``N`` is large or a GPU / MPS device
+is available; prefer NumPy for debugging and environments without JAX.
+Upgrade flags (``multihop``, ``fuzzy``, ``anneal``) are JAX-only.
 
 Synthetic end-to-end harness
 ----------------------------

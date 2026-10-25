@@ -297,7 +297,15 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
     if backend == "numpy":
         return numpy_step, "numpy"
     if backend == "jax":
-        from causal_automata.jax_core import device_info, step as jax_step
+        # Opt into float64 before the first JIT trace (no import-time side effect
+        # inside jax_core). Safe to call repeatedly.
+        from causal_automata.jax_core import (
+            device_info,
+            enable_x64,
+            step as jax_step,
+        )
+
+        enable_x64()
 
         def _step(A, E, Cov, **kwargs):
             import jax.numpy as jnp
@@ -323,9 +331,9 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
                     ),
                 )
             A1, E1 = jax_step(
-                jnp.asarray(A),
-                jnp.asarray(E),
-                jnp.asarray(Cov),
+                jnp.asarray(A, dtype=jnp.float64),
+                jnp.asarray(E, dtype=jnp.float64),
+                jnp.asarray(Cov, dtype=jnp.float64),
                 **call_kwargs,
             )
             return np.asarray(A1), np.asarray(E1)
@@ -387,6 +395,25 @@ class SyntheticBundle:
     seed: int
 
 
+def _permute_bundle_nodes(
+    *,
+    X: np.ndarray,
+    A_true: np.ndarray,
+    truth_edges: tuple[tuple[int, int], ...],
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, tuple[tuple[int, int], ...]]:
+    """Apply a random node relabeling so topo index order is not privileged."""
+    n = A_true.shape[0]
+    perm = rng.permutation(n)
+    # new[:, k] = old[:, perm[k]]  ⇒  old node u lands at position pos[u].
+    pos = np.empty(n, dtype=np.intp)
+    pos[perm] = np.arange(n, dtype=np.intp)
+    X_p = X[:, perm]
+    A_p = A_true[np.ix_(perm, perm)]
+    edges_p = tuple(sorted((int(pos[i]), int(pos[j])) for i, j in truth_edges))
+    return X_p, A_p, edges_p
+
+
 def prepare_synthetic_bundle(
     *,
     n: int = N,
@@ -395,8 +422,14 @@ def prepare_synthetic_bundle(
     weight: float | None = None,
     seed: int = 0,
     target_edges: int | None = None,
+    permute_nodes: bool = True,
 ) -> SyntheticBundle:
-    """Build the same linear-DAG dataset used by :func:`run_phase2`."""
+    """Build the same linear-DAG dataset used by :func:`run_phase2`.
+
+    By default a random node permutation is applied to ``X`` / ``A_true`` /
+    ``truth_edges`` so recovery metrics are not biased by the generator's
+    index-ordered topological labeling (audit finding L4).
+    """
     rng = np.random.default_rng(seed)
     if n_samples is None:
         n_samples = _default_samples(n)
@@ -411,10 +444,15 @@ def prepare_synthetic_bundle(
     X, _ = generate_linear_dag_samples(
         n_samples=n_samples, weight=weight, rng=rng, n=n, edges=truth_edges
     )
+    A_true = truth_adjacency(n, edges=truth_edges)
+    if permute_nodes:
+        perm_rng = np.random.default_rng(seed + 42_017)
+        X, A_true, truth_edges = _permute_bundle_nodes(
+            X=X, A_true=A_true, truth_edges=truth_edges, rng=perm_rng
+        )
     if n > 10:
         X = _standardize_columns(X)
     Cov = empirical_covariance(X)
-    A_true = truth_adjacency(n, edges=truth_edges)
     A_init = random_upper_tri_adjacency(n, p=edge_prob, rng=rng)
     E_init = rng.random(n)
     return SyntheticBundle(
@@ -446,6 +484,7 @@ def run_phase2(
     anneal: bool = False,
     threshold_death_start: float | None = None,
     threshold_birth_start: float | None = None,
+    permute_nodes: bool = True,
 ) -> Phase2Result:
     """Generate data, init state, loop ``step`` (timed), return artifacts."""
     if k is None:
@@ -458,6 +497,7 @@ def run_phase2(
         weight=weight,
         seed=seed,
         target_edges=target_edges,
+        permute_nodes=permute_nodes,
     )
     X, Cov, A_true = bundle.X, bundle.Cov, bundle.A_true
     A = bundle.A_init.copy()

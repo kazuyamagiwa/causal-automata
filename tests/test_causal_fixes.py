@@ -205,7 +205,7 @@ def test_node_permutation_invariance() -> None:
 
 
 def test_step_tick_order_smoke() -> None:
-    """Single step remains JIT-compatible after death→birth→v_well→gravity."""
+    """Single step remains JIT-compatible after gravity→v_well→death→birth."""
     A = jnp.array(
         [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]],
         dtype=jnp.float64,

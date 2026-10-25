@@ -321,7 +321,11 @@ def run_jax_ca(
     try:
         import jax.numpy as jnp
 
-        from causal_automata.jax_core import device_info, step as jax_step
+        from causal_automata.jax_core import (
+            device_info,
+            enable_x64,
+            step as jax_step,
+        )
     except ImportError as exc:  # pragma: no cover
         raise SystemExit(
             "JAX is required for the CA row of this benchmark.\n"
@@ -329,9 +333,10 @@ def run_jax_ca(
             f"Import error: {exc}"
         ) from exc
 
+    enable_x64()
     A = jnp.asarray(A_init, dtype=jnp.float64)
-    E = jnp.asarray(E_init)
-    Cov_j = jnp.asarray(Cov)
+    E = jnp.asarray(E_init, dtype=jnp.float64)
+    Cov_j = jnp.asarray(Cov, dtype=jnp.float64)
 
     if anneal:
         death_end = (
