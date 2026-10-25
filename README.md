@@ -10,17 +10,23 @@ Classical constraint-based causal discovery (PC / Meek orientation rules) relies
 
 ---
 
-## Hero Animation
+## Convergence animation
+
+Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a random init toward the ground-truth DAG (12-node demo).
 
 <p align="center">
   <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence" width="850"/>
+</p>
+
+<p align="center">
+  <a href="assets/elevation_convergence.mp4">▶ MP4 (iPhone)</a>
 </p>
 
 - **Downhill Acyclicity by Construction (\(O(N^2)\)):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG on every tick without \(O(N^3)\) matrix exponential penalties.
 - **Explaining-Away V-Wells:** Unshielded colliders (\(i \to k \leftarrow j\)) are detected via Berkson's effect (\(|\rho_{i,j \mid k}| > |\rho_{i,j}|\)) and pulled below their parents.
 - **Harmonic Gravity Propagation:** Local elevation diffusion (\(E_i \to \frac{1}{2}(\bar{E}_{\mathrm{pa}} + \bar{E}_{\mathrm{ch}})\)) acts as a continuous, parallel relaxation of Meek's orientation rules.
 
-Regenerate the GIF locally:
+Regenerate the animation assets locally (GIF + MP4 + poster; needs `ffmpeg` for the MP4):
 
 ```bash
 python scripts/generate_hero_gif.py
@@ -155,8 +161,10 @@ causal-automata/
 │   ├── jax_core.py          # JAX @jit step / run
 │   └── benchmark.py         # vs gCastle PC / GOLEM
 ├── scripts/
-│   └── generate_hero_gif.py # README hero animation
+│   └── generate_hero_gif.py # README convergence GIF + MP4 + poster
 ├── assets/
+│   ├── elevation_convergence.mp4
+│   ├── elevation_convergence_poster.jpg
 │   └── elevation_convergence.gif
 ├── docs/                    # Sphinx / Read the Docs
 ├── tests/
