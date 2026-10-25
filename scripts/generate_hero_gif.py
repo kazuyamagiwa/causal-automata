@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import animation
 from matplotlib.patches import FancyArrowPatch
+from PIL import Image, ImageSequence
 
 # Repo root on sys.path so `causal_automata` resolves without an editable install.
 _ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +205,68 @@ def _style_axes(ax: plt.Axes, *, title: str) -> None:
         spine.set_color("#334155")
 
 
+def _force_full_frame_delta(im: Image.Image, frame_idx: int) -> Image.Image:
+    """Nudge opposite corners so Pillow cannot crop to a partial dirty-rect.
+
+    Even with ``optimize=False``, Pillow's GIF writer still crops each frame to
+    the bbox of pixels that changed vs the previous frame. Differences at both
+    ``(0,0)`` and ``(w-1,h-1)`` force a full-canvas write. Invisible in practice
+    on a 1210×550 dark plot (1-level channel wobble).
+    """
+    out = im.copy()
+    px = out.load()
+    assert px is not None
+    w, h = out.size
+    r, g, b = px[0, 0]
+    px[0, 0] = (r, g, (b + 1 + (frame_idx % 3)) % 256)
+    r2, g2, b2 = px[w - 1, h - 1]
+    px[w - 1, h - 1] = (r2, g2, (b2 + 1 + (frame_idx % 5)) % 256)
+    return out
+
+
+def _save_safari_safe_gif(
+    src_path: Path,
+    dest_path: Path,
+    *,
+    fps: int = FPS,
+    hold_final: int = HOLD_FINAL,
+) -> None:
+    """Re-encode a GIF so Mobile Safari actually animates it.
+
+    Matplotlib's ``PillowWriter`` writes *partial* frames with disposal=0 and
+    transparency. Safari (esp. iOS) often shows only the first frame for that
+    pattern. Composite every frame to full opaque RGB and re-save with
+    ``disposal=1``, ``optimize=False``, full-canvas frames, and an infinite loop.
+    See: https://github.com/python-pillow/Pillow/issues/8072
+    """
+    duration_ms = max(int(round(1000 / fps)), 1)
+    im = Image.open(src_path)
+    frames: list[Image.Image] = []
+    for frame in ImageSequence.Iterator(im):
+        # ``convert("RGB")`` after seek composites disposal/partial updates.
+        frames.append(frame.convert("RGB"))
+    if not frames:
+        raise RuntimeError(f"no frames decoded from {src_path}")
+
+    # Discrete end-hold frames (Pillow coalesces identical consecutive frames).
+    last = frames[-1]
+    frames.extend(last.copy() for _ in range(hold_final))
+    frames = [_force_full_frame_delta(fr, i) for i, fr in enumerate(frames)]
+
+    durations = [duration_ms] * len(frames)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        dest_path,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=durations,
+        loop=0,
+        disposal=1,  # "do not dispose" — Safari-safe (Pillow #8072)
+        optimize=False,
+    )
+
+
 def render_gif(
     A_hist: np.ndarray,
     E_hist: np.ndarray,
@@ -216,7 +279,6 @@ def render_gif(
     """Two-panel dark-theme animation → GIF via PillowWriter."""
     shd, sk_f1, dir_f1 = compute_metrics(A_hist, A_true)
     n_ticks = A_hist.shape[0]  # ticks+1 (includes t=0)
-    frame_indices = list(range(n_ticks)) + [n_ticks - 1] * hold_final
 
     x_coords = _node_x_coords(N)
     cmap = mpl.colormaps["plasma"]
@@ -395,19 +457,24 @@ def render_gif(
         )
         return (scat, tick_text, shd_line, sk_line, dir_line, *elev_lines, *labels_txt)
 
+    # Render ticks only here; Safari-safe re-encode appends the end hold.
     anim = animation.FuncAnimation(
         fig,
         update,
         init_func=init,
-        frames=frame_indices,
+        frames=list(range(n_ticks)),
         interval=1000 // fps,
         blit=False,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_suffix(".tmp.gif")
     writer = animation.PillowWriter(fps=fps)
-    anim.save(str(out_path), writer=writer, dpi=DPI)
+    anim.save(str(tmp_path), writer=writer, dpi=DPI)
     plt.close(fig)
+
+    _save_safari_safe_gif(tmp_path, out_path, fps=fps, hold_final=hold_final)
+    tmp_path.unlink(missing_ok=True)
     return out_path
 
 
