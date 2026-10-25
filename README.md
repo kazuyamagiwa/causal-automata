@@ -10,7 +10,9 @@ Classical constraint-based causal discovery (PC / Meek orientation rules) relies
 
 ---
 
-## Hero Animation
+## Convergence animation
+
+Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a random init toward the ground-truth DAG (12-node demo).
 
 <p align="center">
   <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence" width="850"/>
@@ -24,7 +26,7 @@ Classical constraint-based causal discovery (PC / Meek orientation rules) relies
 - **Explaining-Away V-Wells:** Unshielded colliders (\(i \to k \leftarrow j\)) are detected via Berkson's effect (\(|\rho_{i,j \mid k}| > |\rho_{i,j}|\)) and pulled below their parents.
 - **Harmonic Gravity Propagation:** Local elevation diffusion (\(E_i \to \frac{1}{2}(\bar{E}_{\mathrm{pa}} + \bar{E}_{\mathrm{ch}})\)) acts as a continuous, parallel relaxation of Meek's orientation rules.
 
-Regenerate the hero assets locally (GIF + MP4 + poster; needs `ffmpeg` for the MP4):
+Regenerate the animation assets locally (GIF + MP4 + poster; needs `ffmpeg` for the MP4):
 
 ```bash
 python scripts/generate_hero_gif.py
@@ -159,7 +161,7 @@ causal-automata/
 │   ├── jax_core.py          # JAX @jit step / run
 │   └── benchmark.py         # vs gCastle PC / GOLEM
 ├── scripts/
-│   └── generate_hero_gif.py # README hero MP4 + poster + GIF
+│   └── generate_hero_gif.py # README convergence GIF + MP4 + poster
 ├── assets/
 │   ├── elevation_convergence.mp4
 │   ├── elevation_convergence_poster.jpg

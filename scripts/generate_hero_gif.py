@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Generate README hero animation assets (MP4 + poster + GIF).
+"""Generate README convergence-animation assets (GIF + MP4 + poster).
 
 Records a short JAX CA trajectory on a clean 12-node hierarchical DAG and
 writes:
 
-* ``assets/elevation_convergence.mp4`` — primary hero (plays on iPhone)
-* ``assets/elevation_convergence_poster.jpg`` — tappable poster with play cue
-* ``assets/elevation_convergence.gif`` — desktop fallback
+* ``assets/elevation_convergence.gif`` — primary README embed
+* ``assets/elevation_convergence.mp4`` — iPhone / reduced-motion fallback
+* ``assets/elevation_convergence_poster.jpg`` — still with play cue (optional)
 
-GitHub's mobile site often freezes animated GIFs (battery / accessibility),
-including third-party READMEs. An H.264 MP4 opened from a poster link is the
-reliable cross-device path.
+GitHub often freezes animated GIFs when accessibility reduced-motion is on.
+The MP4 is a tap-to-play fallback, not the main embed.
 
 Usage::
 
@@ -154,7 +153,7 @@ def run_trajectory(
             Cov_j,
             k=k,
             threshold_birth=0.12,
-            # Slower than the default 0.1 so the hero GIF lets viewers watch
+            # Slower than the default 0.1 so the README GIF lets viewers watch
             # coral FPs die off and nodes glide into strata over ~35–40 ticks.
             learning_rate=0.08,
             multihop=True,
@@ -277,10 +276,10 @@ def _save_mp4(frames: list[Image.Image], dest_path: Path, *, fps: int = FPS) -> 
     """Encode H.264 MP4 via ffmpeg (widest iPhone / GitHub playback)."""
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError("ffmpeg not found on PATH (required for hero MP4)")
+        raise RuntimeError("ffmpeg not found on PATH (required for README MP4)")
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    frame_dir = dest_path.parent / ".hero_frames_tmp"
+    frame_dir = dest_path.parent / ".elevation_frames_tmp"
     if frame_dir.exists():
         shutil.rmtree(frame_dir)
     frame_dir.mkdir(parents=True)
@@ -605,7 +604,7 @@ def main() -> int:
         f"std={E_hist[-1].std():.3f}"
     )
 
-    print("Rendering hero assets (GIF + MP4 + poster)…")
+    print("Rendering animation assets (GIF + MP4 + poster)…")
     gif_path, mp4_path, poster_path = render_animation(A_hist, E_hist, A_true)
     for label, path, limit in (
         ("GIF", gif_path, MAX_GIF_BYTES),
