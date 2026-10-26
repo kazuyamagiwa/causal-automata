@@ -59,8 +59,16 @@ The JAX and NumPy ports
 4. **Birth** — For absent undirected pairs, birth when
    :math:`|\rho| > \tau_{\mathrm{birth}}`, orienting with a
    deterministic elevation tie-break so nodes clipped together at
-   ``0`` / ``1`` still get a direction. A final bound-aware downhill
-   projection keeps the DAG law.
+   ``0`` / ``1`` still get a direction. Tie-breaks use Cov-derived
+   node keys (diag + off-diagonal fingerprint), not raw index order.
+   A final bound-aware downhill projection keeps the DAG law.
+
+**Initialization (L4).** Benchmark / synth defaults use a symmetric
+correlation skeleton ``A0`` (``|R_{ij}| > \tau_{\mathrm{birth}}``) and
+near-flat elevations ``E0 \approx 0.5`` so tick-1 gravity does not lock
+arrows into the generator's ``i < j`` labeling. The legacy upper-
+triangular random ``A0`` is retained as ``init_mode="upper_random"`` for
+the unpermuted H1 regression gate.
 
 **1D elevation embedding.** Downhill-only edges guarantee acyclicity
 without matrix-exponential DAG penalties, but they also force a global

@@ -5,10 +5,10 @@ NumPy reference implementation of the same physics as
 
     gravity → v_well → death → birth
 
-with local-margin elevation drift (no hard 1.0/0.0 anchors), bound-aware
-elevation tie-breaks on birth / final projection, |R|-ranked conditioning
-sets (no raw-elevation mask), and a flat V-well on shared neighbors of
-marginally independent pairs.
+with local-margin elevation drift (no hard 1.0/0.0 anchors), Cov-equivariant
+bound-aware elevation tie-breaks on birth / final projection, |R|-ranked
+conditioning sets (no raw-elevation mask), and a flat V-well on shared
+neighbors of marginally independent pairs.
 """
 
 from __future__ import annotations
@@ -22,16 +22,48 @@ _EXPLAIN_AWAY_MARGIN = 0.02
 _GRAVITY_MARGIN = 0.05
 
 
-def _tiebreak_elevation(E: np.ndarray) -> np.ndarray:
-    """Deterministic elevation jitter so clipped nodes at 0/1 never tie."""
+def _cov_node_keys(Cov: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Permutation-equivariant per-node keys from ``Cov`` (diag + off-diag).
+
+    Primary signal is ``|diag|``; secondary is a sorted-``|Cov|`` off-diagonal
+    fingerprint so equal-variance nodes still separate when their neighbor
+    profiles differ. A microscopic index term breaks remaining automorphic
+    ties (needed so birth can orient when two nodes are exchangeable).
+    """
+    C = np.asarray(Cov, dtype=dtype)
+    n = C.shape[0]
+    diag = np.abs(np.diag(C))
+    scale = np.maximum(float(np.max(diag)), 1e-12)
+    off = np.abs(C).copy()
+    np.fill_diagonal(off, 0.0)
+    # Descending off-diagonal profile — label-free given the Cov entries.
+    ranked = -np.sort(-off, axis=1)
+    weights = (0.5 ** np.arange(n, dtype=dtype))
+    fingerprint = ranked @ weights
+    fp_scale = np.maximum(float(np.max(np.abs(fingerprint))), 1e-12)
+    idx = np.arange(n, dtype=dtype) / max(n, 1)
+    return (diag / scale) + 1e-3 * (fingerprint / fp_scale) + 1e-9 * idx
+
+
+def _tiebreak_elevation(
+    E: np.ndarray, Cov: np.ndarray | None = None
+) -> np.ndarray:
+    """Deterministic elevation jitter so clipped nodes at 0/1 never tie.
+
+    When ``Cov`` is provided, jitter follows Cov-derived node keys
+    (permutation-equivariant up to automorphic ties). Otherwise falls back
+    to index order (legacy).
+    """
     n = E.shape[0]
+    if Cov is not None:
+        return E + 1e-6 * _cov_node_keys(Cov, E.dtype)
     return E + 1e-6 * (np.arange(n, dtype=E.dtype) / max(n, 1))
 
 
-def _downhill_mask(E: np.ndarray) -> np.ndarray:
-    """``E_i > E_j`` with index tie-break only for exact ties at bounds 0/1."""
+def _downhill_mask(E: np.ndarray, Cov: np.ndarray | None = None) -> np.ndarray:
+    """``E_i > E_j`` with tie-break only for exact ties at bounds 0/1."""
     raw = E[:, None] > E[None, :]
-    e_tb = _tiebreak_elevation(E)
+    e_tb = _tiebreak_elevation(E, Cov)
     tb = e_tb[:, None] > e_tb[None, :]
     at_bound = (E <= 0.0) | (E >= 1.0)
     tied_at_bound = (E[:, None] == E[None, :]) & at_bound[:, None] & at_bound[None, :]
@@ -60,6 +92,7 @@ def _topk_by_score(
         return np.full((M, 0), -1, dtype=np.intp), np.zeros(M, dtype=np.intp)
 
     ranked = np.where(mask, scores, -np.inf)
+    # Tiny Cov-free index only breaks exact |R| ties (ordering among equals).
     sort_key = -ranked + np.arange(N, dtype=np.float64) * 1e-12
     order = np.argsort(sort_key, axis=1)
     top = order[:, :k]
@@ -304,7 +337,7 @@ def step(
         Z, counts = _union_neighbor_sets(U, Bi, Bj, k, Cov)
         rho = _batched_partial_corr(Cov, Bi, Bj, Z, counts)
         strong = np.abs(rho) > threshold_birth
-        e_tb = _tiebreak_elevation(E)
+        e_tb = _tiebreak_elevation(E, Cov)
         forward = strong & (e_tb[Bi] > e_tb[Bj])
         backward = strong & (e_tb[Bj] > e_tb[Bi])
         if np.any(forward):
@@ -312,8 +345,8 @@ def step(
         if np.any(backward):
             A[Bj[backward], Bi[backward]] = 1.0
 
-    # Final downhill with bound-aware tie-break.
+    # Final downhill with bound-aware, Cov-equivariant tie-break.
     A = (A > 0).astype(np.float64)
-    A *= _downhill_mask(E)
+    A *= _downhill_mask(E, Cov)
     np.fill_diagonal(A, 0.0)
     return A, E

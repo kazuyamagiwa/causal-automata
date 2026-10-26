@@ -23,12 +23,22 @@ birth deadlocks, align docs with the implemented estimator.
 - **L2** — Removed import-time ``jax_enable_x64``; CLIs / tests call
   :func:`enable_x64` explicitly.
 - **L4** — Synthetic / benchmark bundles apply a random node permutation by
-  default so index-ordered topo labels are not privileged.
+  default so index-ordered topo labels are not privileged. Default init is
+  now permutation-invariant ``corr_flat``: symmetric ``|R| > thr`` skeleton
+  ``A0`` and near-flat ``E0 = 0.5 + 10^{-4}`` noise (legacy upper-tri
+  ``A0`` locked gravity into ``i < j`` on tick 1 — Directed F1 ~0.53 on
+  permuted N=10 seed=0 while Skeleton F1 stayed ~0.80). Birth / final
+  downhill tie-breaks use Cov-derived node keys instead of raw ``arange``.
 
 ### Changed
 
 - Tick order is **gravity → v_well → death → birth** (the death-first v0.3.0
-  JAX order regressed directed recovery on the Phase-2 motif).
+  JAX order regressed directed recovery on the Phase-2 motif). Explaining-away
+  V-well *before* gravity was ablated for L4 and **rejected** (hurt Directed
+  F1); flat V-well after gravity is retained. ``detect_colliders`` remains
+  diagnostic-only.
+- Synth ``init_mode``: ``"corr_flat"`` (default) or ``"upper_random"`` (H1
+  regression / index-ordered motif).
 - Docs (``physics.rst``, README, glossary, quickstart) distinguish Birth vs
   Gravity, document V-well as an elevation force, and state top-``k`` CI /
   \(O(N^2)\) projection vs \(O(N^3)\) tick cost honestly.

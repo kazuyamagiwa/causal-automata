@@ -48,17 +48,45 @@ def device_info() -> str:
     return f"jax backend={jax.default_backend()} device={d0.platform}:{d0.device_kind}"
 
 
-def _tiebreak_elevation(E: jnp.ndarray) -> jnp.ndarray:
-    """Deterministic elevation jitter so clipped nodes at 0/1 never tie."""
+def _cov_node_keys(Cov: jnp.ndarray, dtype) -> jnp.ndarray:
+    """Permutation-equivariant per-node keys from ``Cov`` (diag + off-diag)."""
+    C = Cov.astype(dtype)
+    n = C.shape[0]
+    diag = jnp.abs(jnp.diag(C))
+    scale = jnp.maximum(jnp.max(diag), jnp.asarray(1e-12, dtype))
+    off = jnp.abs(C).at[jnp.diag_indices(n)].set(0.0)
+    ranked = -jnp.sort(-off, axis=1)
+    weights = (jnp.asarray(0.5, dtype) ** jnp.arange(n, dtype=dtype))
+    fingerprint = ranked @ weights
+    fp_scale = jnp.maximum(
+        jnp.max(jnp.abs(fingerprint)), jnp.asarray(1e-12, dtype)
+    )
+    idx = jnp.arange(n, dtype=dtype) / jnp.maximum(n, 1)
+    return (diag / scale) + jnp.asarray(1e-3, dtype) * (
+        fingerprint / fp_scale
+    ) + jnp.asarray(1e-9, dtype) * idx
+
+
+def _tiebreak_elevation(
+    E: jnp.ndarray, Cov: jnp.ndarray | None = None
+) -> jnp.ndarray:
+    """Deterministic elevation jitter so clipped nodes at 0/1 never tie.
+
+    When ``Cov`` is provided, jitter follows Cov-derived node keys
+    (permutation-equivariant up to automorphic ties). Otherwise falls back
+    to index order (legacy).
+    """
     n = E.shape[0]
+    if Cov is not None:
+        return E + jnp.asarray(1e-6, E.dtype) * _cov_node_keys(Cov, E.dtype)
     idx = jnp.arange(n, dtype=E.dtype)
     return E + jnp.asarray(1e-6, E.dtype) * (idx / jnp.maximum(n, 1))
 
 
-def _downhill_mask(E: jnp.ndarray) -> jnp.ndarray:
-    """``E_i > E_j`` with index tie-break only for exact ties at bounds 0/1."""
+def _downhill_mask(E: jnp.ndarray, Cov: jnp.ndarray | None = None) -> jnp.ndarray:
+    """``E_i > E_j`` with tie-break only for exact ties at bounds 0/1."""
     raw = E[:, None] > E[None, :]
-    e_tb = _tiebreak_elevation(E)
+    e_tb = _tiebreak_elevation(E, Cov)
     tb = e_tb[:, None] > e_tb[None, :]
     at_bound = (E <= 0.0) | (E >= 1.0)
     tied_at_bound = (E[:, None] == E[None, :]) & at_bound[:, None] & at_bound[None, :]
@@ -334,10 +362,11 @@ def _apply_gravity_projection(
     *,
     fuzzy: bool,
     death_rate: jnp.ndarray,
+    Cov: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """Downhill-only projection with bound-aware elevation tie-break."""
     n = A.shape[0]
-    gravity_ok = _downhill_mask(E)
+    gravity_ok = _downhill_mask(E, Cov)
     gravity_ok = gravity_ok.at[jnp.diag_indices(n)].set(False)
     if fuzzy:
         A = jnp.where(gravity_ok, A, jnp.maximum(0.0, A - death_rate))
@@ -436,7 +465,7 @@ def _step_impl(
         undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
         candidates = jnp.triu(undirected_absent, k=1)
     strong = candidates & (jnp.abs(rho) > birth_t)
-    e_tb = _tiebreak_elevation(E)
+    e_tb = _tiebreak_elevation(E, Cov)
     downhill = e_tb[:, None] > e_tb[None, :]
     forward = strong & downhill
     backward = strong & downhill.T
@@ -450,8 +479,10 @@ def _step_impl(
         A = jnp.where(forward, one, A)
         A = jnp.where(backward.T, one, A)
 
-    # Final downhill with bound-aware tie-break (keeps birth-at-ceiling edges).
-    A = _apply_gravity_projection(A, E, fuzzy=fuzzy, death_rate=death_rate)
+    # Final downhill with Cov-equivariant bound tie-break.
+    A = _apply_gravity_projection(
+        A, E, fuzzy=fuzzy, death_rate=death_rate, Cov=Cov
+    )
     return A, E
 
 
