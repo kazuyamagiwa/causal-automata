@@ -7,6 +7,12 @@ All notable changes to **causal-automata** are documented in this file.
 Audit-fix release: unify NumPy/JAX physics, repair elevation saturation /
 birth deadlocks, align docs with the implemented estimator.
 
+### Changed (hero animation)
+
+- README convergence GIF / MP4 regenerated from the Phase-2 N=10 motif with
+  default ``corr_flat`` init (symmetric ``|R|`` skeleton, ``E0 ≈ 0.5``), so
+  the clip opens on a flat plateau and separates into elevation strata.
+
 ### Fixed
 
 - **H2 / H3** — Local-margin gravity (no hard ``1.0`` / ``0.0`` anchors) and

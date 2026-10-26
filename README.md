@@ -12,7 +12,7 @@ Classical constraint-based causal discovery (PC / Meek orientation rules) relies
 
 ## Convergence animation
 
-Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a random init toward the ground-truth DAG (12-node demo).
+Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo): roots hold high, V-well colliders sink.
 
 <p align="center">
   <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence" width="850"/>
