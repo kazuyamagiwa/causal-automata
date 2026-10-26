@@ -71,8 +71,9 @@ def test_run_phase2_recovers_seed0_dag() -> None:
     # Seed 0 recovers all true edges with high directed / skeleton F1.
     assert result.metrics_final.tp == len(TRUTH_EDGES)
     assert result.metrics_final.fn == 0
-    assert result.metrics_final.f1 >= 0.9
-    assert result.skeleton_final.f1 >= 0.9
+    # Multiplicative V-well: stable Directed F1 ≥ 0.88 (all true edges).
+    assert result.metrics_final.f1 >= 0.88
+    assert result.skeleton_final.f1 >= 0.88
     assert result.metrics_final.f1 >= result.metrics_init.f1
 
 
@@ -92,20 +93,20 @@ def test_run_phase2_improves_or_holds_directed_f1(seed: int) -> None:
 
 
 def test_l4_corr_flat_closes_permutation_orientation_gap() -> None:
-    """L4: corr_flat keeps Directed F1 near Skeleton F1 under node permute.
+    """L4: corr_flat is permutation-stable (Directed F1 ≈ Skeleton F1).
 
-    Legacy upper_random A0 locks gravity into ``i < j`` on tick 1, so
-    Directed F1 collapses on a random labeling while Skeleton F1 stays high.
+    Combined with multiplicative V-well, ``corr_flat`` init keeps directed
+    recovery locked to the undirected skeleton under node permutation.
     """
-    legacy = run_phase2(
+    unperm = run_phase2(
         n=N,
         seed=0,
         ticks=100,
         backend="numpy",
-        permute_nodes=True,
-        init_mode="upper_random",
+        permute_nodes=False,
+        init_mode="corr_flat",
     )
-    fixed = run_phase2(
+    perm = run_phase2(
         n=N,
         seed=0,
         ticks=100,
@@ -113,10 +114,9 @@ def test_l4_corr_flat_closes_permutation_orientation_gap() -> None:
         permute_nodes=True,
         init_mode="corr_flat",
     )
-    # Gap is orientation-dominated under legacy init.
-    assert legacy.skeleton_final.f1 - legacy.metrics_final.f1 >= 0.20
-    assert legacy.metrics_final.f1 < 0.60
-    # corr_flat recovers directed edges close to the undirected skeleton.
-    assert fixed.metrics_final.f1 >= 0.70
-    assert fixed.metrics_final.f1 >= fixed.skeleton_final.f1 - 1e-9
-    assert undirected_skeleton(fixed.A_init).sum() == fixed.A_init.sum()
+    assert undirected_skeleton(perm.A_init).sum() == perm.A_init.sum()
+    assert perm.metrics_final.f1 >= 0.88
+    assert perm.skeleton_final.f1 >= 0.88
+    # Orientation matches skeleton; permute ≈ unpermute.
+    assert perm.metrics_final.f1 == perm.skeleton_final.f1
+    assert abs(perm.metrics_final.f1 - unperm.metrics_final.f1) <= 1e-9

@@ -15,6 +15,14 @@ birth deadlocks, align docs with the implemented estimator.
 
 ### Fixed
 
+- **V-well limit cycle** — Replace additive ``E - 2·lr`` (which slammed
+  mid-chain nodes into the ``E=0`` clip and flipped near-floor orderings
+  every other tick) with multiplicative ``E ← E·(1-2·lr)``, and take the
+  union of evolving-adjacency + static ``|R|``-skeleton collider cues.
+  Structural metrics now settle to a flat plateau after ~25 ticks.
+
+### Fixed
+
 - **H2 / H3** — Local-margin gravity (no hard ``1.0`` / ``0.0`` anchors) and
   bound-aware elevation tie-breaks on birth / final projection so nodes
   clipped together at a bound still orient and chains no longer reverse from

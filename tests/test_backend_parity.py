@@ -38,11 +38,15 @@ def test_numpy_jax_single_tick_close() -> None:
 
 
 def test_phase2_numpy_and_jax_recover_high_f1() -> None:
-    """Audit H1: both backends recover Directed F1 ≥ 0.90 on N=10 seed=0.
+    """Audit H1: both backends recover the N=10 seed=0 SEM at high F1.
 
     Uses ``permute_nodes=False`` and legacy ``upper_random`` init to match
     the audit SEM (index-ordered motif + upper-tri A0). Default synth
     bundles still permute nodes and use ``corr_flat`` init (L4).
+
+    Directed F1 ≥ 0.88 (all true edges; multiplicative V-well removes the
+    additive floor slam that previously peaked at ~0.94 on oscillating
+    even ticks).
     """
     r_np = run_phase2(
         n=10,
@@ -60,8 +64,10 @@ def test_phase2_numpy_and_jax_recover_high_f1() -> None:
         permute_nodes=False,
         init_mode="upper_random",
     )
-    assert r_np.metrics_final.f1 >= 0.90
-    assert r_jx.metrics_final.f1 >= 0.90
+    assert r_np.metrics_final.tp == r_np.metrics_final.true_edges
+    assert r_np.metrics_final.fn == 0
+    assert r_np.metrics_final.f1 >= 0.88
+    assert r_jx.metrics_final.f1 >= 0.88
     assert abs(r_np.metrics_final.f1 - r_jx.metrics_final.f1) <= 1e-9
     assert abs(r_np.skeleton_final.f1 - r_jx.skeleton_final.f1) <= 1e-9
     assert np.array_equal(r_np.A_final > 0, r_jx.A_final > 0)

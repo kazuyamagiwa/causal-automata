@@ -7,8 +7,8 @@ NumPy reference implementation of the same physics as
 
 with local-margin elevation drift (no hard 1.0/0.0 anchors), Cov-equivariant
 bound-aware elevation tie-breaks on birth / final projection, ``|R|``-ranked
-conditioning sets (no raw-elevation mask), and a flat V-well on shared
-neighbors of marginally independent pairs.
+conditioning sets (no raw-elevation mask), and a multiplicative V-well on
+shared neighbors of marginally independent pairs.
 """
 
 from __future__ import annotations
@@ -20,6 +20,9 @@ _STD_FLOOR = 1e-7
 _SCALE_FLOOR = 1e-7
 _EXPLAIN_AWAY_MARGIN = 0.02
 _GRAVITY_MARGIN = 0.05
+# |R| floor for the static correlation skeleton used by V-well (shielding-robust
+# collider cue alongside the evolving adjacency).
+_VWELL_SKELETON_THRESHOLD = 0.10
 
 
 def _cov_node_keys(Cov: np.ndarray, dtype: np.dtype) -> np.ndarray:
@@ -202,6 +205,41 @@ def _union_neighbor_sets(
     return _topk_by_score(mask, scores, k)
 
 
+def _correlation_skeleton(Cov: np.ndarray, threshold: float) -> np.ndarray:
+    """Symmetric 0/1 adjacency from ``|R_ij| > threshold`` (zero diagonal)."""
+    R = _correlation_matrix(Cov)
+    U = (np.abs(R) > float(threshold)).astype(np.float64)
+    np.fill_diagonal(U, 0.0)
+    return ((U + U.T) > 0).astype(np.float64)
+
+
+def _flat_vwell_colliders(
+    U: np.ndarray,
+    Cov: np.ndarray,
+    threshold_death: float,
+) -> np.ndarray:
+    """Shared neighbors of marginally independent absent pairs on ``U``."""
+    n = U.shape[0]
+    undirected_absent = U == 0.0
+    np.fill_diagonal(undirected_absent, False)
+    shared_counts = U @ U
+    np.fill_diagonal(shared_counts, 0.0)
+    pair_mask = np.triu(undirected_absent & (shared_counts > 0), k=1)
+    Pi, Pj = np.nonzero(pair_mask)
+    if Pi.size == 0:
+        return np.zeros(n, dtype=bool)
+
+    Z_empty = np.zeros((Pi.size, 0), dtype=np.intp)
+    counts0 = np.zeros(Pi.size, dtype=np.intp)
+    rho = _batched_partial_corr(Cov, Pi, Pj, Z_empty, counts0)
+    independent = np.abs(rho) < threshold_death
+    if not np.any(independent):
+        return np.zeros(n, dtype=bool)
+
+    shared = (U[Pi[independent]] > 0) & (U[Pj[independent]] > 0)
+    return shared.any(axis=0)
+
+
 def _vstructure_gravity_well(
     A: np.ndarray,
     E: np.ndarray,
@@ -210,30 +248,26 @@ def _vstructure_gravity_well(
     learning_rate: float,
     threshold_death: float,
 ) -> np.ndarray:
-    """Flat V-well: sink shared neighbors of marginally independent pairs."""
-    U = _undirected_neighbors(A)
-    undirected_absent = (A + A.T) == 0.0
-    np.fill_diagonal(undirected_absent, False)
-    shared_counts = U @ U
-    np.fill_diagonal(shared_counts, 0.0)
-    pair_mask = np.triu(undirected_absent & (shared_counts > 0), k=1)
-    Pi, Pj = np.nonzero(pair_mask)
-    if Pi.size == 0:
+    """V-well: multiplicatively sink shared neighbors of independent pairs.
+
+    Uses ``E ← E · (1 − 2·lr)`` on collider candidates instead of an additive
+    ``E − 2·lr`` slam into the ``0`` clip wall, which destroyed relative
+    ordering near the floor and drove even/odd SHD limit cycles.
+
+    Colliders are the union of cues from the evolving undirected adjacency
+    and a static ``|R|`` correlation skeleton (shielding-robust).
+    """
+    U_a = _undirected_neighbors(A)
+    U_c = _correlation_skeleton(Cov, _VWELL_SKELETON_THRESHOLD)
+    collider = _flat_vwell_colliders(
+        U_a, Cov, threshold_death
+    ) | _flat_vwell_colliders(U_c, Cov, threshold_death)
+    if not np.any(collider):
         return E
 
-    Z_empty = np.zeros((Pi.size, 0), dtype=np.intp)
-    counts0 = np.zeros(Pi.size, dtype=np.intp)
-    rho = _batched_partial_corr(Cov, Pi, Pj, Z_empty, counts0)
-    independent = np.abs(rho) < threshold_death
-    if not np.any(independent):
-        return E
-
-    Ii = Pi[independent]
-    Ij = Pj[independent]
-    shared = (U[Ii] > 0) & (U[Ij] > 0)
-    collider = shared.any(axis=0)
     E = E.copy()
-    E[collider] -= learning_rate * 2.0
+    decay = max(0.0, 1.0 - 2.0 * float(learning_rate))
+    E[collider] *= decay
     return np.clip(E, 0.0, 1.0)
 
 

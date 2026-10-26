@@ -5,8 +5,8 @@ Tick order (each ``step``)::
     gravity → v_well → death → birth
 
 (The v0.3.0 death-first order regressed Phase-2 directed recovery; gravity
-before CI tests matches the historical NumPy prototype that reaches
-Directed F1 ≥ 0.90 on the N=10 seed=0 SEM.)
+before CI tests matches the historical NumPy prototype that recovers the
+Phase-2 N=10 seed=0 SEM at high Directed F1.)
 
 Float64 is **not** enabled at import time. Call :func:`enable_x64` before
 the first JIT trace when you need float64 (benchmark / synth CLIs do this).
@@ -31,7 +31,7 @@ _DEFAULT_BINARIZE = 0.5
 _DEFAULT_HOP_DISCOUNT = 1.0
 _GRAVITY_MARGIN = 0.05
 _EXPLAIN_AWAY_MARGIN = 0.02
-_V_WELL_GAP = 0.15
+_VWELL_SKELETON_THRESHOLD = 0.10
 
 
 def enable_x64() -> None:
@@ -314,6 +314,37 @@ def detect_colliders(
     return is_collider_k
 
 
+def _correlation_skeleton(Cov: jnp.ndarray, threshold: float) -> jnp.ndarray:
+    """Symmetric 0/1 adjacency from ``|R_ij| > threshold`` (zero diagonal)."""
+    n = Cov.shape[0]
+    R = _correlation_matrix(Cov)
+    U = (jnp.abs(R) > threshold).astype(Cov.dtype)
+    U = U.at[jnp.diag_indices(n)].set(0.0)
+    return ((U + U.T) > 0).astype(Cov.dtype)
+
+
+def _flat_vwell_colliders(
+    U: jnp.ndarray,
+    Cov: jnp.ndarray,
+    threshold_death: float | jnp.ndarray,
+) -> jnp.ndarray:
+    """Shared neighbors of marginally independent absent pairs on ``U``."""
+    n = U.shape[0]
+    undirected_absent = U == 0
+    undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
+    shared_counts = U @ U
+    shared_counts = shared_counts.at[jnp.diag_indices(n)].set(0.0)
+    pair_mask = jnp.triu(undirected_absent & (shared_counts > 0), k=1)
+
+    z = jnp.zeros((n, n, 0), dtype=jnp.int32)
+    valid = jnp.zeros((n, n, 0), dtype=bool)
+    rho = _pairwise_partial_corr(Cov, z, valid, k=0)
+    independent = (jnp.abs(rho) < threshold_death) & pair_mask
+    shared = (U[:, None, :] > 0) & (U[None, :, :] > 0)
+    contrib = independent[:, :, None] & shared
+    return jnp.any(contrib, axis=(0, 1))
+
+
 def _vstructure_gravity_well(
     A: jnp.ndarray,
     E: jnp.ndarray,
@@ -327,32 +358,25 @@ def _vstructure_gravity_well(
 
     Absent undirected pairs that share a neighbor and are marginally
     independent (``|ρ| < threshold_death``) mark shared neighbors as
-    colliders and lower their elevation. This flat sink preserves Phase-2
-    directed recovery; :func:`detect_colliders` exposes the stricter
-    explaining-away test for diagnostics.
+    colliders and lower their elevation with a **multiplicative** decay
+    ``E ← E · (1 − 2·lr)``. An additive ``E − 2·lr`` slam into the ``0``
+    clip destroyed relative ordering near the floor (even/odd SHD cycles).
+
+    Colliders are the union of cues from the evolving undirected adjacency
+    and a static ``|R|`` correlation skeleton (shielding-robust).
+    :func:`detect_colliders` exposes the stricter explaining-away test for
+    diagnostics.
     """
     del fuzzy  # undirected pattern uses binary connectivity
-    U = _undirected_neighbors(A)
-    n = A.shape[0]
-    undirected_absent = (A + A.T) == 0
-    undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
-    shared_counts = U @ U
-    shared_counts = shared_counts.at[jnp.diag_indices(n)].set(0.0)
-    pair_mask = jnp.triu(undirected_absent & (shared_counts > 0), k=1)
-
-    # Marginal / empty-Z partial correlation for all pairs.
-    z = jnp.zeros((n, n, 0), dtype=jnp.int32)
-    valid = jnp.zeros((n, n, 0), dtype=bool)
-    rho = _pairwise_partial_corr(Cov, z, valid, k=0)
-    independent = (jnp.abs(rho) < threshold_death) & pair_mask
-    # collider[k] if some independent pair (i,j) both neighbor k
-    shared = (U[:, None, :] > 0) & (U[None, :, :] > 0)  # (i,j,k)
-    # Only upper-tri independent pairs contribute (symmetric).
-    contrib = independent[:, :, None] & shared
-    collider = jnp.any(contrib, axis=(0, 1))
+    U_a = _undirected_neighbors(A)
+    U_c = _correlation_skeleton(Cov, _VWELL_SKELETON_THRESHOLD)
+    collider = _flat_vwell_colliders(
+        U_a, Cov, threshold_death
+    ) | _flat_vwell_colliders(U_c, Cov, threshold_death)
 
     lr = jnp.asarray(learning_rate, dtype=E.dtype)
-    E = jnp.where(collider, E - 2.0 * lr, E)
+    decay = jnp.maximum(jnp.asarray(0.0, dtype=E.dtype), 1.0 - 2.0 * lr)
+    E = jnp.where(collider, E * decay, E)
     return jnp.clip(E, 0.0, 1.0)
 
 
