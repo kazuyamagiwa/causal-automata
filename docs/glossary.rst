@@ -34,7 +34,7 @@ Elevation
 V-well / collider / sink
   A V-structure :math:`i \to k \leftarrow j`. The CA tick lowers
   elevations of shared neighbors of marginally independent absent pairs
-  (flat sink on :math:`E`). The diagnostic helper
+  (multiplicative sink on :math:`E`). The diagnostic helper
   :func:`causal_automata.jax_core.detect_colliders` uses a stricter
   explaining-away (Berkson) test —
   marginally weak :math:`|\rho_{ij}|` but stronger

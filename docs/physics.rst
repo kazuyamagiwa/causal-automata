@@ -43,8 +43,12 @@ The JAX and NumPy ports
    chains). Optional ``multihop=True`` also pulls toward 2-hop means
    from :math:`A@A`.
 2. **V-well** — Acts on **elevations**, not adjacency. Shared neighbors
-   of marginally independent absent pairs are treated as collider
-   candidates and lowered (flat sink). Separately,
+   of marginally independent absent pairs (on the evolving undirected
+   adjacency **and** a static ``|R|`` correlation skeleton) are treated
+   as collider candidates and lowered with a multiplicative decay
+   :math:`E \leftarrow E\,(1-2\alpha)`. This replaces the older additive
+   ``E - 2\alpha`` slam into the ``E=0`` clip wall, which destroyed
+   near-floor orderings and drove even/odd SHD limit cycles. Separately,
    :func:`causal_automata.jax_core.detect_colliders` exposes a stricter
    explaining-away (Berkson) test for diagnostics. After V-well moves
    :math:`E`, later birth / downhill projection prefer arrows into

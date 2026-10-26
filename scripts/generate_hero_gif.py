@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Generate README convergence-animation assets (GIF + MP4).
 
-Records a short JAX CA trajectory on a clean 12-node hierarchical DAG and
-writes:
+Records a short JAX CA trajectory on the Phase-2 N=10 motif with the synth
+``corr_flat`` default init (symmetric ``|R|`` skeleton + near-flat
+``E0 ≈ 0.5``) and writes:
 
 * ``assets/elevation_convergence.gif`` — primary README embed
 * ``assets/elevation_convergence.mp4`` — iPhone / reduced-motion fallback
 
-GitHub often freezes animated GIFs when accessibility reduced-motion is on.
-The MP4 is a tap-to-play fallback, not the main embed.
+The GIF opens on a flat elevation plateau; gravity / V-well then separate
+roots upward and colliders downward. GitHub often freezes animated GIFs when
+accessibility reduced-motion is on — the MP4 is a tap-to-play fallback.
 
 Usage::
 
@@ -38,25 +40,29 @@ if str(_ROOT) not in sys.path:
 
 from causal_automata.bayesian_synth import (  # noqa: E402
     edge_metrics,
-    empirical_covariance,
-    generate_linear_dag_samples,
+    prepare_synthetic_bundle,
     skeleton_metrics,
-    truth_adjacency,
 )
-from causal_automata.jax_core import step  # noqa: E402
+from causal_automata.jax_core import enable_x64, step  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-N = 12
-TICKS = 50
-HOLD_FINAL = 12
-SEED = 8
+N = 10
+TICKS = 100
+HOLD_FINAL = 14
+SEED = 42
 K = 3
 FPS = 10
 DPI = 110
 FIGSIZE = (11, 5)
+LEARNING_RATE = 0.10
+THRESHOLD_BIRTH = 0.10
+THRESHOLD_DEATH = 0.05
+# Multihop compresses the elevation field; leave off so the plateau → strata
+# separation stays visible in the README clip.
+MULTIHOP = False
 OUT_GIF = _ROOT / "assets" / "elevation_convergence.gif"
 OUT_MP4 = _ROOT / "assets" / "elevation_convergence.mp4"
 BG = "#0f172a"
@@ -64,65 +70,27 @@ FG = "#e2e8f0"
 MUTED = "#94a3b8"
 TP_COLOR = "#10b981"
 FP_COLOR = "#ef4444"
+PLATEAU_COLOR = "#64748b"
 MAX_GIF_BYTES = 5 * 1024 * 1024
 MAX_MP4_BYTES = 10 * 1024 * 1024
-
-# 12-node hierarchy (logical order, before random index permutation):
-#   3 roots (0,1,2) → 4 intermediates (3,4,6,7) → 3 colliders (5,8,9) → 2 sinks (10,11)
-LOGICAL_EDGES: tuple[tuple[int, int], ...] = (
-    # roots → intermediates
-    (0, 3),
-    (1, 3),
-    (1, 4),
-    (2, 4),
-    # intermediate forks / collider into 5
-    (3, 5),
-    (4, 5),  # collider 5: 3 → 5 ← 4
-    (3, 6),
-    (4, 7),
-    # colliders 8, 9
-    (5, 8),
-    (6, 8),  # collider 8: 5 → 8 ← 6
-    (6, 9),
-    (7, 9),  # collider 9: 6 → 9 ← 7
-    # sinks
-    (8, 10),
-    (9, 10),
-    (9, 11),
-    (8, 11),
-)
 
 
 def build_hero_problem(
     *,
     seed: int = SEED,
-    n_samples: int = 12_000,
-    weight: float = 2.5,
-    noise_scale: float = 0.7,
-    edge_prob: float = 0.5,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(A_true, Cov, A0, E0, perm)`` with randomly permuted indices."""
-    rng = np.random.default_rng(seed)
-    A_logical = truth_adjacency(N, edges=LOGICAL_EDGES)
-    X, _ = generate_linear_dag_samples(
-        n_samples=n_samples,
-        weight=weight,
-        noise_scale=noise_scale,
-        rng=rng,
+    skeleton_threshold: float = THRESHOLD_BIRTH,
+    elevation_noise: float = 1e-4,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(A_true, Cov, A0, E0)`` via synth ``corr_flat`` defaults."""
+    bundle = prepare_synthetic_bundle(
         n=N,
-        edges=LOGICAL_EDGES,
+        seed=seed,
+        permute_nodes=True,
+        init_mode="corr_flat",
+        skeleton_threshold=skeleton_threshold,
+        elevation_noise=elevation_noise,
     )
-    Cov_logical = empirical_covariance(X)
-
-    # Shuffle node indices so the initial state is not trivially ordered.
-    perm = rng.permutation(N)
-    A_true = A_logical[np.ix_(perm, perm)]
-    Cov = Cov_logical[np.ix_(perm, perm)]
-
-    # Dense random upper-triangular init → many coral FPs that die off.
-    A0 = np.triu((rng.random((N, N)) < edge_prob).astype(np.float64), k=1)
-    E0 = rng.uniform(0.2, 0.8, size=N).astype(np.float64)
-    return A_true, Cov, A0, E0, perm
+    return bundle.A_true, bundle.Cov, bundle.A_init, bundle.E_init
 
 
 def run_trajectory(
@@ -149,11 +117,10 @@ def run_trajectory(
             E,
             Cov_j,
             k=k,
-            threshold_birth=0.12,
-            # Slower than the default 0.1 so the README GIF lets viewers watch
-            # coral FPs die off and nodes glide into strata over ~35–40 ticks.
-            learning_rate=0.08,
-            multihop=True,
+            threshold_birth=THRESHOLD_BIRTH,
+            threshold_death=THRESHOLD_DEATH,
+            learning_rate=LEARNING_RATE,
+            multihop=MULTIHOP,
         )
         return (A_next, E_next), (A_next, E_next)
 
@@ -161,7 +128,7 @@ def run_trajectory(
         body, (A0_j, E0_j), xs=None, length=ticks
     )
 
-    # Prepend tick-0 initial state so the GIF starts unorganized.
+    # Prepend tick-0 plateau so the GIF starts flat / undirected.
     A_full = np.concatenate(
         [np.asarray(A0_j)[None, ...], np.asarray(A_hist)], axis=0
     )
@@ -353,14 +320,14 @@ def render_animation(
     ax_f1 = ax_met.twinx()
 
     fig.suptitle(
-        "causal-automata  ·  synchronous XLA scan  ·  E_t gravity field",
+        "causal-automata  ·  corr_flat init  ·  E≈0.5 plateau → strata",
         color=FG,
         fontsize=11,
         y=0.97,
     )
 
     _style_axes(ax_dag, title="Causal Automaton: Live DAG & Gravity Field E_t")
-    _style_axes(ax_elev, title="Elevation Trajectories E_t")
+    _style_axes(ax_elev, title="Elevation Trajectories E_t (flat → separated)")
     _style_axes(ax_met, title="Structural Convergence")
     ax_f1.set_facecolor(BG)
     ax_f1.tick_params(colors=MUTED, labelsize=7)
@@ -373,11 +340,27 @@ def render_animation(
     ax_dag.set_ylabel("Topological Elevation E_t", fontsize=8, color=MUTED)
     ax_dag.set_xticks(x_coords)
     ax_dag.set_xticklabels([str(i) for i in range(N)], fontsize=7)
+    ax_dag.axhline(
+        0.5,
+        color=PLATEAU_COLOR,
+        lw=0.9,
+        ls="--",
+        alpha=0.55,
+        zorder=1,
+    )
 
     elev_lines = []
     for i in range(N):
         (ln,) = ax_elev.plot([], [], lw=1.15, color=cmap(E_hist[0, i]), alpha=0.85)
         elev_lines.append(ln)
+    ax_elev.axhline(
+        0.5,
+        color=PLATEAU_COLOR,
+        lw=0.9,
+        ls="--",
+        alpha=0.55,
+        zorder=1,
+    )
     ax_elev.set_xlim(0, n_ticks - 1)
     ax_elev.set_ylim(-0.05, 1.05)
     ax_elev.set_ylabel("E_t[i]", fontsize=8, color=MUTED)
@@ -526,22 +509,35 @@ def render_animation(
 
 
 def main() -> int:
-    print("Building 12-node hierarchical DAG (permuted indices)…")
-    A_true, Cov, A0, E0, perm = build_hero_problem()
+    enable_x64()
+    print(
+        f"Building Phase-2 N={N} motif (seed={SEED}, corr_flat, "
+        f"permute_nodes=True)…"
+    )
+    A_true, Cov, A0, E0 = build_hero_problem()
     n_true = int(A_true.sum())
-    print(f"  true edges: {n_true}  |  perm: {perm.tolist()}")
-    print(f"  init edges: {int(A0.sum())}  |  ticks={TICKS}  k={K}")
+    print(f"  true edges: {n_true}")
+    print(
+        f"  init undirected pairs: {int(A0.sum()) // 2}  |  "
+        f"A0 symmetric={bool(np.allclose(A0, A0.T))}  |  "
+        f"E0≈0.5 max|E-0.5|={float(np.max(np.abs(E0 - 0.5))):.2e}"
+    )
+    print(
+        f"  ticks={TICKS}  k={K}  lr={LEARNING_RATE}  "
+        f"multihop={MULTIHOP}"
+    )
 
     print("Recording trajectory via jax.lax.scan…")
     A_hist, E_hist = run_trajectory(A0, E0, Cov, ticks=TICKS, k=K)
+    print(
+        f"  E0→E_final spread: std {float(E_hist[0].std()):.2e} → "
+        f"{float(E_hist[-1].std()):.3f}  "
+        f"(min={float(E_hist[-1].min()):.3f}, max={float(E_hist[-1].max()):.3f})"
+    )
     shd, sk_f1, dir_f1 = compute_metrics(A_hist, A_true)
     print(
         f"  final SHD={int(shd[-1])}  "
         f"skel F1={sk_f1[-1]:.3f}  dir F1={dir_f1[-1]:.3f}"
-    )
-    print(
-        f"  elevations: min={E_hist[-1].min():.3f}  max={E_hist[-1].max():.3f}  "
-        f"std={E_hist[-1].std():.3f}"
     )
 
     print("Rendering animation assets (GIF + MP4)…")

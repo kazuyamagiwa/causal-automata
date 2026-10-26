@@ -7,6 +7,20 @@ All notable changes to **causal-automata** are documented in this file.
 Audit-fix release: unify NumPy/JAX physics, repair elevation saturation /
 birth deadlocks, align docs with the implemented estimator.
 
+### Changed (hero animation)
+
+- README convergence GIF / MP4 regenerated from the Phase-2 N=10 motif with
+  default ``corr_flat`` init (symmetric ``|R|`` skeleton, ``E0 ≈ 0.5``), so
+  the clip opens on a flat plateau and separates into elevation strata.
+
+### Fixed
+
+- **V-well limit cycle** — Replace additive ``E - 2·lr`` (which slammed
+  mid-chain nodes into the ``E=0`` clip and flipped near-floor orderings
+  every other tick) with multiplicative ``E ← E·(1-2·lr)``, and take the
+  union of evolving-adjacency + static ``|R|``-skeleton collider cues.
+  Structural metrics now settle to a flat plateau after ~25 ticks.
+
 ### Fixed
 
 - **H2 / H3** — Local-margin gravity (no hard ``1.0`` / ``0.0`` anchors) and

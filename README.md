@@ -12,7 +12,7 @@ Classical constraint-based causal discovery (PC / Meek orientation rules) relies
 
 ## Convergence animation
 
-Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a random init toward the ground-truth DAG (12-node demo).
+Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo): roots hold high, V-well colliders sink.
 
 <p align="center">
   <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence" width="850"/>
@@ -23,7 +23,7 @@ Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a 
 </p>
 
 - **Downhill Acyclicity by Construction (\(O(N^2)\) projection):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG without \(O(N^3)\) matrix-exponential penalties. (A full tick with dense pair scores and batched \((2+k)\times(2+k)\) inversions still scales closer to \(O(N^3)\).)
-- **V-Wells on elevations:** Shared neighbors of marginally independent pairs are pulled downward in \(E\) (collider cue); later birth / downhill projection prefer \(i \to k \leftarrow j\).
+- **V-Wells on elevations:** Shared neighbors of marginally independent pairs are pulled downward in \(E\) with a multiplicative decay (collider cue; avoids clipping into an even/odd SHD limit cycle); later birth / downhill projection prefer \(i \to k \leftarrow j\).
 - **Local-margin Gravity:** Elevation drift toward parent/child means with a small margin for roots/leaves (no hard \(1.0/0.0\) anchors that saturated random inits).
 
 Regenerate the animation assets locally (GIF + MP4; needs `ffmpeg` for the MP4):
@@ -138,7 +138,7 @@ uv add "causal-automata[jax]"
 State is a binary DAG adjacency \(A\), node elevations \(E \in [0,1]\), and a fixed empirical covariance \(\mathrm{Cov}\) from continuous observations. Each tick is a local cellular update (**gravity → V-well → death → birth**):
 
 1. **Gravity** — raw downhill projection, then local-margin elevation drift (roots sit just above children, leaves just below parents; isolates hold \(E\)). Optional **`--multihop`** also pulls toward 2-hop means from \(A @ A\).
-2. **V-Well** — lowers elevations of shared neighbors of marginally independent pairs (collider cue on \(E\); edges re-orient via birth / downhill later).
+2. **V-Well** — multiplicatively lowers elevations of shared neighbors of marginally independent pairs (collider cue on \(E\); edges re-orient via birth / downhill later).
 3. **Death** — prune weak edges using partial correlations conditioned on the top-`k` union neighbors ranked by absolute correlation \(|R|\) (heuristic CI — not an exhaustive \(\min_Z\) search).
 4. **Birth** — add strong edges with the same partial-corr gate; orientation uses a deterministic elevation tie-break so nodes clipped at the same bound still get a direction. Optional **`--fuzzy`** keeps continuous weights in \([0, 1]\) and binarizes only after the final tick.
 
