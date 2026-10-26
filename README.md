@@ -22,9 +22,9 @@ Short clip of the elevation field \(E_t\) and adjacency \(A_t\) settling from a 
   <a href="assets/elevation_convergence.mp4">▶ MP4 (iPhone)</a>
 </p>
 
-- **Downhill Acyclicity by Construction (\(O(N^2)\)):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG on every tick without \(O(N^3)\) matrix exponential penalties.
-- **Explaining-Away V-Wells:** Unshielded colliders (\(i \to k \leftarrow j\)) are detected via Berkson's effect (\(|\rho_{i,j \mid k}| > |\rho_{i,j}|\)) and pulled below their parents.
-- **Harmonic Gravity Propagation:** Local elevation diffusion (\(E_i \to \frac{1}{2}(\bar{E}_{\mathrm{pa}} + \bar{E}_{\mathrm{ch}})\)) acts as a continuous, parallel relaxation of Meek's orientation rules.
+- **Downhill Acyclicity by Construction (\(O(N^2)\) projection):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG without \(O(N^3)\) matrix-exponential penalties. (A full tick with dense pair scores and batched \((2+k)\times(2+k)\) inversions still scales closer to \(O(N^3)\).)
+- **V-Wells on elevations:** Shared neighbors of marginally independent pairs are pulled downward in \(E\) (collider cue); later birth / downhill projection prefer \(i \to k \leftarrow j\).
+- **Local-margin Gravity:** Elevation drift toward parent/child means with a small margin for roots/leaves (no hard \(1.0/0.0\) anchors that saturated random inits).
 
 Regenerate the animation assets locally (GIF + MP4; needs `ffmpeg` for the MP4):
 
@@ -135,14 +135,14 @@ uv add "causal-automata[jax]"
 
 ## How the 4 Dynamical Rules Work
 
-State is a binary DAG adjacency \(A\), node elevations \(E \in [0,1]\), and a fixed empirical covariance \(\mathrm{Cov}\) from continuous observations. Each tick is a local cellular update:
+State is a binary DAG adjacency \(A\), node elevations \(E \in [0,1]\), and a fixed empirical covariance \(\mathrm{Cov}\) from continuous observations. Each tick is a local cellular update (**gravity → V-well → death → birth**):
 
-1. **Death** — prune weak edges using partial correlations conditioned on the top-`k` union neighbors ranked by \(|\mathrm{Cov}|\), after masking candidates with elevation below both endpoints (blocks collider / M-bias in \(S_{i,j}\)).
-2. **Birth** — add strong edges with the same partial-corr gate; orientation follows elevation after the \(|\rho|\) threshold. Optional **`--fuzzy`** keeps continuous weights in \([0, 1]\) and binarizes only after the final tick.
-3. **V-Well** — unshielded triples \((i, k, j)\) that show explaining-away (Berkson): marginally weak \(|\rho_{ij}|\) but stronger \(|\rho_{ij|k}|\) mark middle node \(k\) as a **collider**. Collider elevations are pushed below \(\min(E_i, E_j) - 0.15\); parents are gently buoyed — the classic V-structure \(i \to k \leftarrow j\).
-4. **Gravity** — drift elevations toward the midpoint of parent/child means (roots anchor missing parents at \(1.0\), leaves missing children at \(0.0\), isolates hold \(E\)), then keep only downhill edges with a tiny index tie-break. With **`--multihop`**, that drift also sees 2-hop neighbors from \(A @ A\) (discounted pull) to help break Markov-equivalence ties.
+1. **Gravity** — raw downhill projection, then local-margin elevation drift (roots sit just above children, leaves just below parents; isolates hold \(E\)). Optional **`--multihop`** also pulls toward 2-hop means from \(A @ A\).
+2. **V-Well** — lowers elevations of shared neighbors of marginally independent pairs (collider cue on \(E\); edges re-orient via birth / downhill later).
+3. **Death** — prune weak edges using partial correlations conditioned on the top-`k` union neighbors ranked by absolute correlation \(|R|\) (heuristic CI — not an exhaustive \(\min_Z\) search).
+4. **Birth** — add strong edges with the same partial-corr gate; orientation uses a deterministic elevation tie-break so nodes clipped at the same bound still get a direction. Optional **`--fuzzy`** keeps continuous weights in \([0, 1]\) and binarizes only after the final tick.
 
-The pure functional JAX port (`jax_core.step` / `jax_core.run`) is `@jax.jit`-compiled; `run(..., ticks=..., k=...)` marks `ticks` and `k` as **static** so `jax.lax.scan` length and `(2+k)×(2+k)` partial-corr blocks stay compile-time constants. See [JAX static arguments](https://causal-automata.readthedocs.io/en/latest/jax_static.html) for `functools.partial` patterns that avoid `ConcretizationTypeError`.
+NumPy (`bayesian.step`) and JAX (`jax_core.step` / `run`) share this physics. The JAX port is `@jax.jit`-compiled; `run(..., ticks=..., k=...)` marks `ticks` and `k` as **static** so `jax.lax.scan` length and `(2+k)×(2+k)` partial-corr blocks stay compile-time constants. See [JAX static arguments](https://causal-automata.readthedocs.io/en/latest/jax_static.html) for `functools.partial` patterns that avoid `ConcretizationTypeError`.
 
 **Full documentation** (theory, physics, API, CLI): https://causal-automata.readthedocs.io/en/latest/
 
@@ -184,7 +184,7 @@ If you use `causal-automata` in research, please cite:
   author       = {Yamagiwa, Masakazu},
   title        = {causal-automata: GPU-Native Causal Discovery via Synchronous Cellular Automata in JAX},
   year         = {2026},
-  version      = {0.3.0},
+  version      = {0.3.1},
   url          = {https://github.com/kazuyamagiwa/causal-automata},
   license      = {Apache-2.0}
 }

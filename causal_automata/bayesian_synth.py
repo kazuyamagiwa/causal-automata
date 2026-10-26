@@ -175,11 +175,44 @@ def random_upper_tri_adjacency(
     p: float = 0.4,
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
-    """Random binary upper-triangular adjacency (strict, zero diagonal)."""
+    """Random binary upper-triangular adjacency (strict, zero diagonal).
+
+    Legacy index-ordered init: all edges satisfy ``i < j``, which leaks a
+    global topo bias into gravity on tick 1 (audit L4). Prefer
+    :func:`correlation_skeleton_adjacency` for permutation-invariant runs.
+    """
     if rng is None:
         rng = np.random.default_rng(0)
     A = (rng.random((n, n)) < p).astype(np.float64)
     return np.triu(A, k=1)
+
+
+def correlation_skeleton_adjacency(
+    Cov: np.ndarray,
+    threshold: float = 0.10,
+) -> np.ndarray:
+    """Symmetric undirected seed from ``|R_ij| > threshold`` (zero diagonal).
+
+    Both directions are set so the skeleton is index-order free; the first
+    gravity / downhill projection orients edges from elevations.
+    """
+    std = np.sqrt(np.maximum(np.diag(Cov), 1e-12))
+    R = Cov / (std[:, None] * std[None, :])
+    U = (np.abs(R) > float(threshold)).astype(np.float64)
+    np.fill_diagonal(U, 0.0)
+    return ((U + U.T) > 0).astype(np.float64)
+
+
+def flat_elevations(
+    n: int,
+    rng: np.random.Generator,
+    *,
+    noise: float = 1e-4,
+) -> np.ndarray:
+    """Near-flat elevations ``0.5 + tiny noise`` (no index-order signal)."""
+    return np.clip(
+        0.5 + float(noise) * rng.standard_normal(n), 0.0, 1.0
+    ).astype(np.float64)
 
 
 def undirected_skeleton(A: np.ndarray) -> np.ndarray:
@@ -297,7 +330,15 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
     if backend == "numpy":
         return numpy_step, "numpy"
     if backend == "jax":
-        from causal_automata.jax_core import device_info, step as jax_step
+        # Opt into float64 before the first JIT trace (no import-time side effect
+        # inside jax_core). Safe to call repeatedly.
+        from causal_automata.jax_core import (
+            device_info,
+            enable_x64,
+            step as jax_step,
+        )
+
+        enable_x64()
 
         def _step(A, E, Cov, **kwargs):
             import jax.numpy as jnp
@@ -323,9 +364,9 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
                     ),
                 )
             A1, E1 = jax_step(
-                jnp.asarray(A),
-                jnp.asarray(E),
-                jnp.asarray(Cov),
+                jnp.asarray(A, dtype=jnp.float64),
+                jnp.asarray(E, dtype=jnp.float64),
+                jnp.asarray(Cov, dtype=jnp.float64),
                 **call_kwargs,
             )
             return np.asarray(A1), np.asarray(E1)
@@ -387,6 +428,25 @@ class SyntheticBundle:
     seed: int
 
 
+def _permute_bundle_nodes(
+    *,
+    X: np.ndarray,
+    A_true: np.ndarray,
+    truth_edges: tuple[tuple[int, int], ...],
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, tuple[tuple[int, int], ...]]:
+    """Apply a random node relabeling so topo index order is not privileged."""
+    n = A_true.shape[0]
+    perm = rng.permutation(n)
+    # new[:, k] = old[:, perm[k]]  ⇒  old node u lands at position pos[u].
+    pos = np.empty(n, dtype=np.intp)
+    pos[perm] = np.arange(n, dtype=np.intp)
+    X_p = X[:, perm]
+    A_p = A_true[np.ix_(perm, perm)]
+    edges_p = tuple(sorted((int(pos[i]), int(pos[j])) for i, j in truth_edges))
+    return X_p, A_p, edges_p
+
+
 def prepare_synthetic_bundle(
     *,
     n: int = N,
@@ -395,8 +455,27 @@ def prepare_synthetic_bundle(
     weight: float | None = None,
     seed: int = 0,
     target_edges: int | None = None,
+    permute_nodes: bool = True,
+    init_mode: str = "corr_flat",
+    skeleton_threshold: float = 0.10,
+    elevation_noise: float = 1e-4,
 ) -> SyntheticBundle:
-    """Build the same linear-DAG dataset used by :func:`run_phase2`."""
+    """Build the same linear-DAG dataset used by :func:`run_phase2`.
+
+    By default a random node permutation is applied to ``X`` / ``A_true`` /
+    ``truth_edges`` so recovery metrics are not biased by the generator's
+    index-ordered topological labeling (audit finding L4).
+
+    ``init_mode``
+        * ``"corr_flat"`` (default) — symmetric ``|R|>threshold`` skeleton and
+          near-flat elevations (permutation-invariant; closes L4 A0 bias).
+        * ``"upper_random"`` — legacy upper-triangular ``A0`` + ``U(0,1)``
+          elevations (index-ordered; kept for H1 regression comparisons).
+    """
+    if init_mode not in ("corr_flat", "upper_random"):
+        raise ValueError(
+            f"init_mode must be 'corr_flat' or 'upper_random', got {init_mode!r}"
+        )
     rng = np.random.default_rng(seed)
     if n_samples is None:
         n_samples = _default_samples(n)
@@ -411,12 +490,25 @@ def prepare_synthetic_bundle(
     X, _ = generate_linear_dag_samples(
         n_samples=n_samples, weight=weight, rng=rng, n=n, edges=truth_edges
     )
+    A_true = truth_adjacency(n, edges=truth_edges)
+    if permute_nodes:
+        perm_rng = np.random.default_rng(seed + 42_017)
+        X, A_true, truth_edges = _permute_bundle_nodes(
+            X=X, A_true=A_true, truth_edges=truth_edges, rng=perm_rng
+        )
     if n > 10:
         X = _standardize_columns(X)
     Cov = empirical_covariance(X)
-    A_true = truth_adjacency(n, edges=truth_edges)
-    A_init = random_upper_tri_adjacency(n, p=edge_prob, rng=rng)
-    E_init = rng.random(n)
+    if init_mode == "corr_flat":
+        A_init = correlation_skeleton_adjacency(
+            Cov, threshold=skeleton_threshold
+        )
+        # Dedicated stream so A_init / data RNG stay independent of E noise.
+        e_rng = np.random.default_rng(seed + 91_733)
+        E_init = flat_elevations(n, e_rng, noise=elevation_noise)
+    else:
+        A_init = random_upper_tri_adjacency(n, p=edge_prob, rng=rng)
+        E_init = rng.random(n)
     return SyntheticBundle(
         X=X,
         Cov=Cov,
@@ -446,6 +538,8 @@ def run_phase2(
     anneal: bool = False,
     threshold_death_start: float | None = None,
     threshold_birth_start: float | None = None,
+    permute_nodes: bool = True,
+    init_mode: str = "corr_flat",
 ) -> Phase2Result:
     """Generate data, init state, loop ``step`` (timed), return artifacts."""
     if k is None:
@@ -458,6 +552,9 @@ def run_phase2(
         weight=weight,
         seed=seed,
         target_edges=target_edges,
+        permute_nodes=permute_nodes,
+        init_mode=init_mode,
+        skeleton_threshold=threshold_birth,
     )
     X, Cov, A_true = bundle.X, bundle.Cov, bundle.A_true
     A = bundle.A_init.copy()

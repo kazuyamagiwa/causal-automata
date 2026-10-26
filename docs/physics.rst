@@ -4,102 +4,95 @@ Physics rules and matrix mechanics
 The automaton state at tick :math:`t` is the adjacency
 :math:`A^{(t)} \in \mathbb{R}^{N \times N}` together with elevations
 :math:`E^{(t)} \in [0, 1]^N`. The observational environment supplies
-static forces via covariance / correlation, mutual information, and
-conditional mutual information (approximated here by partial correlation
-from the empirical covariance for linear-Gaussian data).
+static forces via the empirical covariance; conditional dependence is
+approximated by **partial correlation** (linear-Gaussian proxy for CMI).
 
-Paper-level forces
-------------------
+Paper-level forces (conceptual)
+-------------------------------
 
-The conceptual transition (Foundations / Intuition papers) is
+Early manuscripts write a single additive update
 
 .. math::
 
    A^{(t+1)} = \sigma\bigl(A^{(t)} + \alpha G + \beta V - \gamma D\bigr),
 
-where :math:`G` is gravity (birth of strong links), :math:`V` compiles
-V-well / sink forces, :math:`D` is death (pruning), and :math:`\sigma`
-clips to a valid range. Weights :math:`\alpha, \beta, \gamma` balance the
-forces.
-
-Gravity (birth skeleton)
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-High mutual information seeds undirected connections:
-
-.. math::
-
-   G_{ij} =
-   \begin{cases}
-   1 & \text{if } I(X_i; X_j) > \tau_{\mathrm{gravity}} \\
-   0 & \text{otherwise}
-   \end{cases}
-
-Analogy: stars forming from dense gas — the strongest correlations form
-the skeleton.
-
-V-wells (collider / sink detection)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For triplets :math:`(i, j, k)`,
-
-.. math::
-
-   V_{ijk} = I(X_i; X_j \mid X_k) - I(X_i; X_j).
-
-If conditioning on :math:`k` *increases* dependence, :math:`k` is a sink.
-The rule pushes :math:`A_{ik}, A_{jk}` toward 1 and suppresses reverse
-arrows — locking in :math:`i \to k \leftarrow j`.
-
-Death (pruning)
-^^^^^^^^^^^^^^^
-
-If any separating set :math:`Z` makes :math:`i` and :math:`j` independent,
-
-.. math::
-
-   D_{ij} = \mathbf{1}\Bigl(\min_Z I(X_i; X_j \mid Z) < \tau_{\mathrm{death}}\Bigr).
-
-False transitive edges (ice cream ↔ sharks) are erased.
+where :math:`G` seeded undirected links from mutual information, :math:`V`
+compiled collider / sink forces on **edges**, and :math:`D` pruned weak
+links. That formula is a **conceptual** sketch only. The shipped engine
+implements four named stages with different targets (see below):
+**Birth** (not “Gravity”) adds conditional-correlation edges;
+**V-well** moves the elevation field :math:`E` (not :math:`A` directly);
+**Gravity** is elevation drift plus downhill projection;
+**Death** is a fixed top-``k`` partial-correlation prune — a fast
+heuristic CI test, **not** an exhaustive :math:`\min_Z` search as in PC.
 
 Implemented tick (code)
 -----------------------
 
-The JAX port (:func:`causal_automata.jax_core.step`,
-:func:`causal_automata.jax_core.run`) implements one operational
-physics adapted for batched partial correlation. Each tick runs in this
-order:
+The JAX and NumPy ports
+(:func:`causal_automata.jax_core.step`,
+:func:`causal_automata.bayesian.step`) share one operational order:
 
-1. **Death** — For existing edges, estimate partial correlation given the
-   top-``k`` union neighbors ranked by
-   :math:`\max(|\mathrm{Cov}_{m i}|, |\mathrm{Cov}_{m j}|)`, after masking
-   candidates with elevation below both endpoints (blocks common
-   descendants / M-bias in :math:`S_{i,j}`). Kill when
-   :math:`|\rho| < \tau_{\mathrm{death}}`.
-2. **Birth** — For all absent undirected pairs, birth when
-   :math:`|\rho| > \tau_{\mathrm{birth}}`, orienting by elevation
-   (equal elevation → no-op).
-3. **V-structure gravity well** — Unshielded triples
-   :math:`(i, k, j)` that show explaining-away (Berkson): marginally weak
-   :math:`|\rho_{ij}|` but stronger :math:`|\rho_{ij\mid k}|` mark middle
-   node :math:`k` as a collider. Collider elevations are pushed toward
-   :math:`\min(E_i, E_j) - 0.15`; parents are gently buoyed.
-4. **Gravity (topography)** — Drift each elevation toward the midpoint of
-   parent and child means. Roots (``in_deg == 0``) anchor the missing
-   parent reference at ``1.0``; leaves (``out_deg == 0``) anchor missing
-   children at ``0.0``; isolates hold ``E``. Then keep only downhill edges
-   with a tiny index tie-break so clipped nodes at ``0.0`` / ``1.0`` never
-   tie.
+1. **Gravity (topography)** — Project to downhill edges with a raw
+   :math:`E_i > E_j` compare, then drift each elevation toward a
+   **local-margin** target: midpoint of parent/child means when both
+   sides exist; roots sit just above mean children
+   (:math:`+\delta`, default :math:`\delta=0.05`); leaves sit just below
+   mean parents; isolates hold :math:`E`. There are **no** hard anchors
+   at ``1.0`` / ``0.0`` (those saturated random inits and reversed
+   chains). Optional ``multihop=True`` also pulls toward 2-hop means
+   from :math:`A@A`.
+2. **V-well** — Acts on **elevations**, not adjacency. Shared neighbors
+   of marginally independent absent pairs are treated as collider
+   candidates and lowered (flat sink). Separately,
+   :func:`causal_automata.jax_core.detect_colliders` exposes a stricter
+   explaining-away (Berkson) test for diagnostics. After V-well moves
+   :math:`E`, later birth / downhill projection prefer arrows into
+   sinks (:math:`i \to k \leftarrow j`).
+3. **Death** — For existing edges, estimate partial correlation given
+   the top-``k`` union neighbors ranked by
+   :math:`|R_{iz}| + |R_{jz}|` (Pearson correlation, scale-free). Kill
+   when :math:`|\rho| < \tau_{\mathrm{death}}`. This is a **heuristic**
+   separator (fixed ``k``, ``|R|`` ranking) — not
+   :math:`\min_Z I(X_i;X_j\mid Z)`. Raw elevation is **not** used to
+   mask candidates (that excluded true confounders under random ``E0``).
+4. **Birth** — For absent undirected pairs, birth when
+   :math:`|\rho| > \tau_{\mathrm{birth}}`, orienting with a
+   deterministic elevation tie-break so nodes clipped together at
+   ``0`` / ``1`` still get a direction. Tie-breaks use Cov-derived
+   node keys (diag + off-diagonal fingerprint), not raw index order.
+   A final bound-aware downhill projection keeps the DAG law.
+
+**Initialization (L4).** Benchmark / synth defaults use a symmetric
+correlation skeleton ``A0`` (``|R_{ij}| > \tau_{\mathrm{birth}}``) and
+near-flat elevations ``E0 \approx 0.5`` so tick-1 gravity does not lock
+arrows into the generator's ``i < j`` labeling. The legacy upper-
+triangular random ``A0`` is retained as ``init_mode="upper_random"`` for
+the unpermuted H1 regression gate.
+
+**1D elevation embedding.** Downhill-only edges guarantee acyclicity
+without matrix-exponential DAG penalties, but they also force a global
+scalar ranking of nodes. Wrong elevations can delete true edges until
+gravity / V-well reshape ``E``; multihop gravity helps break some
+Markov-equivalence ties but does not remove that coupling.
 
 Default API thresholds are ``threshold_death=0.05``,
 ``threshold_birth=0.15``, ``k=2``, ``learning_rate=0.1``. The synthetic /
 benchmark CLIs typically use ``threshold_birth=0.10`` and a
 **scale-aware** ``k`` (``3`` if :math:`N\le 50`, ``5`` if :math:`N>50`).
-Optional ``multihop=True`` adds discounted 2-hop elevation pull from
-:math:`A@A` (Maximum Accuracy Mode).
 
 ``ticks`` (scan length in ``run``) and ``k`` (block size ``2+k``) are JIT
 **static** arguments — see :doc:`jax_static`.
+
+Complexity
+----------
+
+* **Downhill acyclicity projection** is :math:`O(N^2)` and avoids
+  :math:`O(N^3)` matrix-exponential / spectral DAG penalties.
+* A full tick also builds dense pair×candidate score tensors and
+  batched ``(2+k)×(2+k)`` inversions, so wall-clock work scales closer
+  to :math:`O(N^3)` (with a ``\log N`` factor from per-pair top-``k``
+  sorts) at large ``N``.
 
 GPU / accelerator matrix computation
 ------------------------------------
@@ -114,9 +107,9 @@ Component     Structure                               JAX / NumPy operation
 ============= ======================================= =====================================
 State         :math:`N \times N`                      Array update / ``jax.lax``-friendly
 Death / birth Ranked :math:`Z`, :math:`\rho`          Batched ``linalg.inv`` ``(2+k)``
-V-wells       Unshielded explaining-away triples      Boolean reductions; relative sinks
-Gravity       Parent/child means + downhill mask      Element-wise / optional ``A@A``
-DAG law       Elevations                              Hard downhill + tie-break
+V-wells       Shared-neighbor independence sinks      Boolean reductions on ``E``
+Gravity       Local-margin means + downhill mask      Element-wise / optional ``A@A``
+DAG law       Elevations                              Hard downhill + bound tie-break
 ============= ======================================= =====================================
 
 ``@jax.jit`` removes Python loop overhead so hundreds of ticks over
