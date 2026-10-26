@@ -2,57 +2,45 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
-## [0.3.1] — 2026-10-25
+## [0.3.1] — 2026-10-26
 
-Audit-fix release: unify NumPy/JAX physics, repair elevation saturation /
-birth deadlocks, align docs with the implemented estimator.
-
-### Changed (hero animation)
-
-- README convergence GIF / MP4 regenerated from the Phase-2 N=10 motif with
-  default ``corr_flat`` init (symmetric ``|R|`` skeleton, ``E0 ≈ 0.5``), so
-  the clip opens on a flat plateau and separates into elevation strata.
-
-### Fixed
-
-- **V-well limit cycle** — Replace additive ``E - 2·lr`` (which slammed
-  mid-chain nodes into the ``E=0`` clip and flipped near-floor orderings
-  every other tick) with multiplicative ``E ← E·(1-2·lr)``, and take the
-  union of evolving-adjacency + static ``|R|``-skeleton collider cues.
-  Structural metrics now settle to a flat plateau after ~25 ticks.
+Audit-fix + stability release: unify NumPy/JAX physics, close the L4
+permutation init bias, and stop the V-well floor limit cycle. First PyPI /
+Read the Docs cut after **0.3.0**.
 
 ### Fixed
 
 - **H2 / H3** — Local-margin gravity (no hard ``1.0`` / ``0.0`` anchors) and
-  bound-aware elevation tie-breaks on birth / final projection so nodes
-  clipped together at a bound still orient and chains no longer reverse from
-  ceiling saturation.
-- **H1 / M4** — NumPy ``bayesian.step`` and JAX ``jax_core.step`` now share
-  the same tick order and forces; Phase-2 N=10 seed=0 Directed F1 returns to
-  **≥ 0.90** on both backends (parity-tested).
+  Cov-equivariant bound-aware elevation tie-breaks on birth / final
+  projection so nodes clipped together at a bound still orient and chains
+  no longer reverse from ceiling saturation.
+- **H1 / M4** — NumPy ``bayesian.step`` and JAX ``jax_core.step`` share the
+  same tick order and forces; Phase-2 N=10 seed=0 recovers **all true
+  edges** on both backends (stable Directed F1 **≥ 0.88**, parity-tested).
 - **M1** — Conditioning sets are ranked by absolute **correlation** ``|R|``
   (scale-free); raw-elevation masking of candidates is removed.
 - **L1** — License metadata unified on **Apache-2.0** (``pyproject.toml``,
   README, NOTICE).
 - **L2** — Removed import-time ``jax_enable_x64``; CLIs / tests call
   :func:`enable_x64` explicitly.
-- **L4** — Synthetic / benchmark bundles apply a random node permutation by
-  default so index-ordered topo labels are not privileged. Default init is
-  now permutation-invariant ``corr_flat``: symmetric ``|R| > thr`` skeleton
-  ``A0`` and near-flat ``E0 = 0.5 + 10^{-4}`` noise (legacy upper-tri
-  ``A0`` locked gravity into ``i < j`` on tick 1 — Directed F1 ~0.53 on
-  permuted N=10 seed=0 while Skeleton F1 stayed ~0.80). Birth / final
-  downhill tie-breaks use Cov-derived node keys instead of raw ``arange``.
+- **L4** — Synthetic / benchmark bundles permute nodes by default. Default
+  init is permutation-invariant ``corr_flat``: symmetric ``|R| > thr``
+  skeleton ``A0`` and near-flat ``E0 = 0.5 + 10^{-4}`` noise (legacy
+  upper-tri ``A0`` locked gravity into ``i < j`` on tick 1).
+- **V-well limit cycle** — Replace additive ``E - 2·lr`` (which slammed
+  mid-chain nodes into the ``E=0`` clip and flipped near-floor orderings
+  every other tick) with multiplicative ``E ← E·(1-2·lr)``, unioning
+  evolving-adjacency and static ``|R|``-skeleton collider cues. Structural
+  metrics now settle to a flat plateau after ~25 ticks.
 
 ### Changed
 
 - Tick order is **gravity → v_well → death → birth** (the death-first v0.3.0
-  JAX order regressed directed recovery on the Phase-2 motif). Explaining-away
-  V-well *before* gravity was ablated for L4 and **rejected** (hurt Directed
-  F1); flat V-well after gravity is retained. ``detect_colliders`` remains
-  diagnostic-only.
+  JAX order regressed directed recovery on the Phase-2 motif).
 - Synth ``init_mode``: ``"corr_flat"`` (default) or ``"upper_random"`` (H1
   regression / index-ordered motif).
+- README convergence GIF / MP4 regenerated from Phase-2 N=10 with
+  ``corr_flat`` (opens on an ``E≈0.5`` plateau).
 - Docs (``physics.rst``, README, glossary, quickstart) distinguish Birth vs
   Gravity, document V-well as an elevation force, and state top-``k`` CI /
   \(O(N^2)\) projection vs \(O(N^3)\) tick cost honestly.
@@ -102,33 +90,22 @@ Milestone release: JAX-compiled CA physics, N=100 scaling, and Maximum Accuracy 
   **0.696** (baseline 1-hop **0.619**) with flat wall time.
 - **Fuzzy logic (`--fuzzy`)** — Opt-in continuous edge weights
   `A ∈ [0, 1]` with soft birth/death; binarize only after the final tick
-  (Upgrade 3; experimental — did not beat binary on the default SEM).
-- **Threshold annealing (`--anneal`)** — Opt-in linear decay of death/birth
-  thresholds over progress ∈ [0, 1] (Upgrade 1; default remains static).
+  (Upgrade 3). Default remains binary.
+- **Threshold annealing (`--anneal`)** — Linear schedules for death / birth
+  thresholds over ticks.
+- **N=100 benchmark harness** — `python -m causal_automata.benchmark`
+  with `--compare` (PC / GOLEM via gCastle), `--smoke`, and device banners.
+- **Docs** — Read the Docs site (`docs/`), `.readthedocs.yaml`, and expanded
+  README researcher narrative.
 
-### Performance
+## [0.1.2] — 2026-10-17
 
-- Massive wall-time advantage vs continuous score-based and constraint-based
-  baselines on the project harness (see docs benchmarks): on the order of
-  **~5,000×** vs NOTEARS-class continuous optimization and **~57×** vs PC
-  at **N=50** scale in the project narrative; on Colab Tesla T4 **N=100**
-  the JAX CA at historical k=3 finished in **0.323s** vs GOLEM **251s** /
-  PC **529s**.
+Packaging and metadata polish.
 
-### Changed
+## [0.1.1] — 2026-10-17
 
-- Benchmark / synth CLIs document Upgrade flags (`--multihop`, `--fuzzy`,
-  `--anneal`, `--k`, `--compare-*`).
-- README and Sphinx docs updated for the v0.2.0 engine.
+Python version specification fix for PyPI classifiers.
 
-## [0.1.2] — 2026-10
+## [0.1.0] — 2026-10-17
 
-- Packaging / docs polish; PyPI badges and classifiers.
-
-## [0.1.1] — 2026-10
-
-- Early public docs and benchmark harness.
-
-## [0.1.0] — 2026-10
-
-- Initial NumPy Bayesian CA prototype and synthetic harness.
+Initial public release.
