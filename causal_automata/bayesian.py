@@ -6,7 +6,7 @@ NumPy reference implementation of the same physics as
     gravity → v_well → death → birth
 
 with local-margin elevation drift (no hard 1.0/0.0 anchors), Cov-equivariant
-bound-aware elevation tie-breaks on birth / final projection, |R|-ranked
+bound-aware elevation tie-breaks on birth / final projection, ``|R|``-ranked
 conditioning sets (no raw-elevation mask), and a flat V-well on shared
 neighbors of marginally independent pairs.
 """
