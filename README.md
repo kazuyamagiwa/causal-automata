@@ -42,7 +42,7 @@ python scripts/generate_hero_gif.py
 > python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
 > ```
 
-**v0.3.0** — Corrected V-well / gravity / conditioning physics, JIT-safe `run(ticks, k)`, and Maximum Accuracy Mode (`--multihop`, Directed F1 **0.696** on N=100). See [CHANGELOG.md](CHANGELOG.md).
+**v0.3.1** — Audit-fix release: unified NumPy/JAX physics, `corr_flat` init (L4), multiplicative V-well (no SHD limit cycle), and refreshed README hero GIF. See [CHANGELOG.md](CHANGELOG.md). Maximum Accuracy Mode (`--multihop`) still reaches Directed F1 **0.696** on N=100.
 
 Default stack (Upgrade 2): **`k=3` if N≤50**, **`k=5` if N>50**, binary edges, 1-hop gravity. On N=100 (`seed=0`, static thresholds, `ticks=100`) that baseline hits Skeleton **0.937** / Directed **0.619** in about **2.8s**.
 
