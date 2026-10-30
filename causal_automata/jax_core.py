@@ -18,6 +18,14 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+
+from causal_automata.bayesian import (
+    _COLLIDER_ELEV_MARGIN,
+    _COLLIDER_SCORE_WEIGHT,
+    dag_to_cpdag,
+    fisher_z_threshold,
+)
 
 _RIDGE = 1e-7
 _STD_FLOOR = 1e-7
@@ -114,13 +122,16 @@ def _pairwise_topk_Z(
     Cov: jnp.ndarray,
     k: int,
     A: jnp.ndarray | None = None,
+    E: jnp.ndarray | None = None,
+    threshold_death: float | jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Top-``k`` union neighbors ranked by ``|R[i,z]| + |R[j,z]|``.
 
-    Does **not** mask by raw elevation (avoids excluding true confounders
-    with unlucky ``E0``). When ``A`` is provided, masks **common directed
-    children** ``(A[i,z] > 0) & (A[j,z] > 0)`` to limit collider / M-bias
-    leakage into ``S_{i,j}``.
+    Filters out candidates disconnected from both ``i`` and ``j`` in the
+    correlation skeleton (``|R| < threshold_death``) and down-weights nodes
+    that sit clearly below both ``i`` and ``j`` in ``E``
+    (``E[m] < jnp.minimum(E[i], E[j]) - 0.02``) so ``S_{i,j}`` prioritizes
+    upstream/adjacent candidate parents rather than sunk colliders.
     """
     n = U.shape[0]
     idx = jnp.arange(n)
@@ -134,7 +145,19 @@ def _pairwise_topk_Z(
 
     R = _correlation_matrix(Cov)
     abs_R = jnp.abs(R)
+    if threshold_death is not None:
+        thr_d = jnp.asarray(threshold_death, dtype=abs_R.dtype)
+        corr_connected = (abs_R[:, None, :] >= thr_d) | (abs_R[None, :, :] >= thr_d)
+        pool = pool & corr_connected
+
     scores = abs_R[:, None, :] + abs_R[None, :, :]
+    if E is not None:
+        margin = jnp.asarray(_COLLIDER_ELEV_MARGIN, dtype=E.dtype)
+        weight = jnp.asarray(_COLLIDER_SCORE_WEIGHT, dtype=scores.dtype)
+        below_both = E[None, None, :] < (
+            jnp.minimum(E[:, None, None], E[None, :, None]) - margin
+        )
+        scores = jnp.where(below_both, scores * weight, scores)
 
     ranked = jnp.where(pool, scores, -jnp.inf)
     sort_key = -ranked + idx.astype(ranked.dtype) * jnp.asarray(1e-12, ranked.dtype)
@@ -465,11 +488,10 @@ def _step_impl(
     )
 
     # --- 3. Death -----------------------------------------------------------
-    # Conditioning: |R|-ranked neighbors; no elevation mask (M1). Common-child
-    # masking is omitted by default — it drops Phase-2 Directed F1 below 0.90
-    # on the N=10 motif while |R| ranking alone removes scale bias.
     U = _undirected_neighbors(A, fuzzy=fuzzy)
-    Z, valid = _pairwise_topk_Z(U, Cov, k, A=None)
+    Z, valid = _pairwise_topk_Z(
+        U, Cov, k, A=None, E=E, threshold_death=death_t
+    )
     rho = _pairwise_partial_corr(Cov, Z, valid, k)
     existing = A > 0
     kill = existing & (jnp.abs(rho) < death_t)
@@ -480,7 +502,9 @@ def _step_impl(
 
     # --- 4. Birth: tie-broken elevation orientation -------------------------
     U = _undirected_neighbors(A, fuzzy=fuzzy)
-    Z, valid = _pairwise_topk_Z(U, Cov, k, A=None)
+    Z, valid = _pairwise_topk_Z(
+        U, Cov, k, A=None, E=E, threshold_death=death_t
+    )
     rho = _pairwise_partial_corr(Cov, Z, valid, k)
     if fuzzy:
         candidates = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
@@ -511,7 +535,7 @@ def _step_impl(
 
 
 @partial(jax.jit, static_argnames=("k", "anneal", "fuzzy", "multihop"))
-def step(
+def _step_jit(
     A: jnp.ndarray,
     E: jnp.ndarray,
     Cov: jnp.ndarray,
@@ -530,7 +554,6 @@ def step(
     multihop: bool = False,
     hop_discount: float = _DEFAULT_HOP_DISCOUNT,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """One Bayesian CA tick (JAX): gravity, V-well, death, then birth."""
     return _step_impl(
         A,
         E,
@@ -551,8 +574,57 @@ def step(
     )
 
 
+def step(
+    A: jnp.ndarray,
+    E: jnp.ndarray,
+    Cov: jnp.ndarray,
+    learning_rate: float = 0.1,
+    threshold_death: float = 0.05,
+    threshold_birth: float = 0.15,
+    k: int = 2,
+    *,
+    n_samples: int | None = None,
+    alpha: float | None = None,
+    anneal: bool = False,
+    progress: float = 1.0,
+    threshold_death_start: float = _DEFAULT_DEATH_START,
+    threshold_birth_start: float = _DEFAULT_BIRTH_START,
+    fuzzy: bool = False,
+    birth_rate: float = _DEFAULT_BIRTH_RATE,
+    death_rate: float = _DEFAULT_DEATH_RATE,
+    multihop: bool = False,
+    hop_discount: float = _DEFAULT_HOP_DISCOUNT,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """One Bayesian CA tick (JAX): gravity, V-well, death, then birth."""
+    if n_samples is not None:
+        alpha_val = 0.01 if alpha is None else float(alpha)
+        fz_death = fisher_z_threshold(int(n_samples), k_cond=k, alpha=alpha_val)
+        if threshold_death == 0.05:
+            threshold_death = fz_death
+        if threshold_birth == 0.15:
+            threshold_birth = 1.2 * threshold_death
+    return _step_jit(
+        A,
+        E,
+        Cov,
+        learning_rate,
+        threshold_death,
+        threshold_birth,
+        k,
+        anneal=anneal,
+        progress=progress,
+        threshold_death_start=threshold_death_start,
+        threshold_birth_start=threshold_birth_start,
+        fuzzy=fuzzy,
+        birth_rate=birth_rate,
+        death_rate=death_rate,
+        multihop=multihop,
+        hop_discount=hop_discount,
+    )
+
+
 @partial(jax.jit, static_argnames=("ticks", "k", "anneal", "fuzzy", "multihop"))
-def run(
+def _run_jit(
     A0: jnp.ndarray,
     E0: jnp.ndarray,
     Cov: jnp.ndarray,
@@ -571,7 +643,6 @@ def run(
     multihop: bool = False,
     hop_discount: float = _DEFAULT_HOP_DISCOUNT,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Run ``ticks`` CA steps via ``jax.lax.scan`` (JIT; ``ticks``/``k`` static)."""
     A0 = jnp.asarray(A0)
     E0 = jnp.asarray(E0).reshape(-1)
     Cov = jnp.asarray(Cov)
@@ -608,6 +679,55 @@ def run(
     return A, E
 
 
+def run(
+    A0: jnp.ndarray,
+    E0: jnp.ndarray,
+    Cov: jnp.ndarray,
+    ticks: int = 100,
+    k: int = 3,
+    learning_rate: float = 0.1,
+    threshold_death: float = 0.05,
+    threshold_birth: float = 0.15,
+    *,
+    n_samples: int | None = None,
+    alpha: float | None = None,
+    anneal: bool = False,
+    threshold_death_start: float = _DEFAULT_DEATH_START,
+    threshold_birth_start: float = _DEFAULT_BIRTH_START,
+    fuzzy: bool = False,
+    birth_rate: float = _DEFAULT_BIRTH_RATE,
+    death_rate: float = _DEFAULT_DEATH_RATE,
+    multihop: bool = False,
+    hop_discount: float = _DEFAULT_HOP_DISCOUNT,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Run ``ticks`` CA steps via ``jax.lax.scan`` (JIT; ``ticks``/``k`` static)."""
+    if n_samples is not None:
+        alpha_val = 0.01 if alpha is None else float(alpha)
+        fz_death = fisher_z_threshold(int(n_samples), k_cond=k, alpha=alpha_val)
+        if threshold_death == 0.05:
+            threshold_death = fz_death
+        if threshold_birth == 0.15:
+            threshold_birth = 1.2 * threshold_death
+    return _run_jit(
+        A0,
+        E0,
+        Cov,
+        ticks=ticks,
+        k=k,
+        learning_rate=learning_rate,
+        threshold_death=threshold_death,
+        threshold_birth=threshold_birth,
+        anneal=anneal,
+        threshold_death_start=threshold_death_start,
+        threshold_birth_start=threshold_birth_start,
+        fuzzy=fuzzy,
+        birth_rate=birth_rate,
+        death_rate=death_rate,
+        multihop=multihop,
+        hop_discount=hop_discount,
+    )
+
+
 def binarize(A: jnp.ndarray, threshold: float = _DEFAULT_BINARIZE) -> jnp.ndarray:
     """Threshold continuous / binary adjacency for metrics (post-loop)."""
     A = jnp.asarray(A)
@@ -628,3 +748,181 @@ def warmup(
     Cov = jnp.eye(n)
     step(A, E, Cov, k=k, fuzzy=fuzzy, multihop=multihop)
     return device_info()
+
+
+class CausalAutomaton:
+    """High-level estimator for Bayesian Cellular Automaton causal discovery.
+
+    Supports fitting from a sample matrix ``X`` (auto-detecting ``n_samples = X.shape[0]``
+    and calibrating ``threshold_death`` / ``threshold_birth`` via
+    :func:`fisher_z_threshold` when not explicitly overridden) or from a
+    precomputed covariance matrix ``cov``.
+    """
+
+    def __init__(
+        self,
+        *,
+        ticks: int = 100,
+        k: int | None = None,
+        learning_rate: float = 0.1,
+        threshold_death: float | None = None,
+        threshold_birth: float | None = None,
+        thr_death: float | None = None,
+        thr_birth: float | None = None,
+        n_samples: int | None = None,
+        alpha: float | None = None,
+        backend: str = "jax",
+        multihop: bool = False,
+        hop_discount: float = _DEFAULT_HOP_DISCOUNT,
+        fuzzy: bool = False,
+        birth_rate: float = _DEFAULT_BIRTH_RATE,
+        death_rate: float = _DEFAULT_DEATH_RATE,
+        anneal: bool = False,
+        seed: int = 0,
+    ) -> None:
+        self.ticks = ticks
+        self.k = k
+        self.learning_rate = learning_rate
+        self.threshold_death = (
+            thr_death if thr_death is not None else threshold_death
+        )
+        self.threshold_birth = (
+            thr_birth if thr_birth is not None else threshold_birth
+        )
+        self.n_samples = n_samples
+        self.alpha = alpha
+        self.backend = backend
+        self.multihop = multihop
+        self.hop_discount = hop_discount
+        self.fuzzy = fuzzy
+        self.birth_rate = birth_rate
+        self.death_rate = death_rate
+        self.anneal = anneal
+        self.seed = seed
+
+        self.adjacency_: np.ndarray | None = None
+        self.cpdag_: np.ndarray | None = None
+        self.elevation_: np.ndarray | None = None
+        self.thr_death_: float | None = None
+        self.thr_birth_: float | None = None
+
+    def fit(
+        self,
+        X: np.ndarray | None = None,
+        *,
+        cov: np.ndarray | None = None,
+        n_samples: int | None = None,
+        alpha: float | None = None,
+    ) -> CausalAutomaton:
+        """Fit the causal automaton to sample matrix ``X`` or covariance ``cov``."""
+        from causal_automata.bayesian_synth import (
+            correlation_skeleton_adjacency,
+            default_conditioning_k,
+            empirical_covariance,
+            flat_elevations,
+        )
+
+        if X is None and cov is None:
+            raise ValueError("Either X or cov must be provided to fit()")
+        if X is not None:
+            X_arr = np.asarray(X, dtype=np.float64)
+            if X_arr.ndim != 2:
+                raise ValueError(f"X must be 2D (n_samples, p), got {X_arr.shape}")
+            Cov = empirical_covariance(X_arr)
+            eff_n_samples = (
+                n_samples
+                if n_samples is not None
+                else (self.n_samples if self.n_samples is not None else int(X_arr.shape[0]))
+            )
+        else:
+            Cov = np.asarray(cov, dtype=np.float64)
+            eff_n_samples = n_samples if n_samples is not None else self.n_samples
+
+        p = Cov.shape[0]
+        k_val = int(self.k) if self.k is not None else default_conditioning_k(p)
+        eff_alpha = (
+            float(alpha)
+            if alpha is not None
+            else (float(self.alpha) if self.alpha is not None else 0.01)
+        )
+
+        if self.threshold_death is not None:
+            thr_d = float(self.threshold_death)
+        elif eff_n_samples is not None:
+            thr_d = fisher_z_threshold(
+                int(eff_n_samples), k_cond=k_val, alpha=eff_alpha
+            )
+        else:
+            thr_d = 0.05
+
+        if self.threshold_birth is not None:
+            thr_b = float(self.threshold_birth)
+        elif eff_n_samples is not None:
+            thr_b = 1.2 * thr_d
+        else:
+            thr_b = 0.15
+
+        self.thr_death_ = thr_d
+        self.thr_birth_ = thr_b
+
+        A0 = correlation_skeleton_adjacency(Cov, threshold=thr_b)
+        E0 = flat_elevations(p, np.random.default_rng(self.seed + 91_733))
+
+        if self.backend == "numpy":
+            from causal_automata.bayesian import step as np_step
+
+            A_curr, E_curr = A0.copy(), E0.copy()
+            for _ in range(self.ticks):
+                A_curr, E_curr = np_step(
+                    A_curr,
+                    E_curr,
+                    Cov,
+                    learning_rate=self.learning_rate,
+                    threshold_death=thr_d,
+                    threshold_birth=thr_b,
+                    k=k_val,
+                )
+            self.adjacency_ = A_curr
+            self.elevation_ = E_curr
+        elif self.backend == "jax":
+            enable_x64()
+            Af, Ef = run(
+                jnp.asarray(A0, dtype=jnp.float64),
+                jnp.asarray(E0, dtype=jnp.float64),
+                jnp.asarray(Cov, dtype=jnp.float64),
+                ticks=self.ticks,
+                k=k_val,
+                learning_rate=self.learning_rate,
+                threshold_death=thr_d,
+                threshold_birth=thr_b,
+                anneal=self.anneal,
+                fuzzy=self.fuzzy,
+                birth_rate=self.birth_rate,
+                death_rate=self.death_rate,
+                multihop=self.multihop,
+                hop_discount=self.hop_discount,
+            )
+            if self.fuzzy:
+                Af = binarize(Af)
+            self.adjacency_ = np.asarray(Af, dtype=np.float64).copy()
+            self.elevation_ = np.asarray(Ef, dtype=np.float64).copy()
+        else:
+            raise ValueError(f"Unknown backend {self.backend!r}; use 'jax' or 'numpy'")
+
+        self.cpdag_ = dag_to_cpdag(self.adjacency_)
+        return self
+
+    def fit_predict(
+        self,
+        X: np.ndarray | None = None,
+        *,
+        cov: np.ndarray | None = None,
+        n_samples: int | None = None,
+        alpha: float | None = None,
+        return_cpdag: bool = False,
+    ) -> np.ndarray:
+        """Fit and return the learned DAG adjacency (or CPDAG if ``return_cpdag=True``)."""
+        self.fit(X, cov=cov, n_samples=n_samples, alpha=alpha)
+        assert self.adjacency_ is not None and self.cpdag_ is not None
+        return self.cpdag_ if return_cpdag else self.adjacency_
+

@@ -24,7 +24,11 @@ from typing import Callable
 
 import numpy as np
 
-from causal_automata.bayesian import step as numpy_step
+from causal_automata.bayesian import (
+    dag_to_cpdag,
+    fisher_z_threshold,
+    step as numpy_step,
+)
 
 # ---------------------------------------------------------------------------
 # Phase-2 N=10 ground truth (fixed motifs; kept for tests / default CLI)
@@ -525,6 +529,7 @@ def run_phase2(
     *,
     n: int = N,
     n_samples: int | None = None,
+    alpha: float | None = None,
     ticks: int = 100,
     edge_prob: float | None = None,
     weight: float | None = None,
@@ -544,6 +549,10 @@ def run_phase2(
     """Generate data, init state, loop ``step`` (timed), return artifacts."""
     if k is None:
         k = default_conditioning_k(n)
+    if alpha is not None and threshold_death == 0.05 and threshold_birth == 0.10:
+        eff_n = n_samples if n_samples is not None else _default_samples(n)
+        threshold_death = fisher_z_threshold(eff_n, k_cond=k, alpha=float(alpha))
+        threshold_birth = 1.2 * threshold_death
     step_fn, device = _resolve_step(backend)
     bundle = prepare_synthetic_bundle(
         n=n,
