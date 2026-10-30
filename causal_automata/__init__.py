@@ -1,8 +1,12 @@
 """causal-automata: JAX-accelerated cellular automaton engine for causal discovery."""
 
-from causal_automata.bayesian import step as numpy_step
-from causal_automata.bayesian_synth import default_conditioning_k
+from causal_automata.bayesian import (
+    dag_to_cpdag,
+    fisher_z_threshold,
+    step as numpy_step,
+)
 from causal_automata.jax_core import (
+    CausalAutomaton,
     binarize,
     detect_colliders,
     device_info,
@@ -12,10 +16,19 @@ from causal_automata.jax_core import (
     warmup,
 )
 
+
+def default_conditioning_k(n: int) -> int:
+    """Scale-aware default conditioning-set size (3 if n <= 50 else 5)."""
+    return 3 if n <= 50 else 5
+
+
 __all__ = [
+    "CausalAutomaton",
     "step",
     "run",
     "numpy_step",
+    "fisher_z_threshold",
+    "dag_to_cpdag",
     "device_info",
     "enable_x64",
     "warmup",
@@ -25,4 +38,4 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"

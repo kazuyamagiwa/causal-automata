@@ -44,6 +44,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from causal_automata.bayesian import fisher_z_threshold
 from causal_automata.bayesian_synth import (
     SyntheticBundle,
     default_conditioning_k,
@@ -303,6 +304,8 @@ def run_jax_ca(
     learning_rate: float = 0.1,
     threshold_death: float = 0.05,
     threshold_birth: float = 0.10,
+    n_samples: int | None = None,
+    alpha: float | None = None,
     k: int = 3,
     anneal: bool = False,
     threshold_death_start: float = ANNEAL_DEATH_START,
@@ -334,6 +337,13 @@ def run_jax_ca(
         ) from exc
 
     enable_x64()
+    if n_samples is not None:
+        alpha_val = 0.01 if alpha is None else float(alpha)
+        fz_death = fisher_z_threshold(int(n_samples), k_cond=k, alpha=alpha_val)
+        if threshold_death == 0.05:
+            threshold_death = fz_death
+        if threshold_birth in (0.10, 0.15):
+            threshold_birth = 1.2 * threshold_death
     A = jnp.asarray(A_init, dtype=jnp.float64)
     E = jnp.asarray(E_init, dtype=jnp.float64)
     Cov_j = jnp.asarray(Cov, dtype=jnp.float64)

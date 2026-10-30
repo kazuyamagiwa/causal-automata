@@ -21,7 +21,7 @@ and the NumPy prototype as :func:`causal_automata.numpy_step`.
    )
    from causal_automata.bayesian_synth import prepare_synthetic_bundle
 
-   print(__version__, warmup())  # e.g. 0.3.1 + device string
+   print(__version__, warmup())  # e.g. 0.3.2 + device string
 
    n = 100
    bundle = prepare_synthetic_bundle(n=n, seed=0)

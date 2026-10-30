@@ -2,6 +2,40 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
+## [0.3.2] — 2026-10-31
+
+Benchpress calibration release: sample-size-adaptive Fisher-z thresholds,
+collider-aware top-``k`` conditioning, and DAG-to-CPDAG Markov equivalence
+conversion.
+
+### Added
+
+- **`fisher_z_threshold(n_samples, k_cond=3, alpha=0.01)`** — computes
+  ``tanh(z_crit / sqrt(max(n_samples - k_cond - 3, 1)))`` so moderate-weight
+  edges are not over-pruned when sample size ``n`` is known.
+- **`CausalAutomaton`** — high-level estimator (`fit`, `fit_predict`) that
+  auto-detects `n_samples = X.shape[0]` from data `X` (setting
+  `thr_death = fisher_z_threshold(...)` and `thr_birth = 1.2 * thr_death`
+  unless explicitly overridden) while preserving legacy fixed defaults when
+  only `cov` is passed. `step` and `run` also accept optional `n_samples`
+  and `alpha`.
+- **`dag_to_cpdag(A)`** — Chickering / Meek DAG-to-CPDAG conversion utility
+  (preserves unshielded v-structures and closes under Meek rules R1–R3,
+  leaving Markov-equivalent edges undirected as `A[i,j] = A[j,i] = 1`).
+- **Tests** — `tests/test_v032_benchpress.py` covering Fisher-z calibration,
+  collider down-weighting parity, Chickering/Meek CPDAG rules, and `p=20, n=1000`
+  Erdős–Rényi Gaussian DAG recovery.
+
+### Changed
+
+- **Conditioning-set collider protection (`jax_core.py` & `bayesian.py`)** —
+  top-``k`` conditioning candidate selection filters out nodes disconnected
+  from both endpoints in the correlation skeleton (`|R| < threshold_death`)
+  and down-weights nodes sitting clearly below both endpoints in elevation
+  (`E[m] < min(E[i], E[j]) - 0.02`), preventing sunk colliders from crowding
+  out upstream parents in `S_{i,j}` on larger graphs (`p=20`). Both NumPy and
+  JAX backends share the exact same logic.
+
 ## [0.3.1] — 2026-10-26
 
 Audit-fix + stability release: unify NumPy/JAX physics, close the L4

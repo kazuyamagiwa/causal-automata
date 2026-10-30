@@ -13,6 +13,8 @@ shared neighbors of marginally independent pairs.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 _RIDGE = 1e-7
@@ -20,9 +22,157 @@ _STD_FLOOR = 1e-7
 _SCALE_FLOOR = 1e-7
 _EXPLAIN_AWAY_MARGIN = 0.02
 _GRAVITY_MARGIN = 0.05
+_COLLIDER_ELEV_MARGIN = 0.02
+_COLLIDER_SCORE_WEIGHT = 0.05
 # |R| floor for the static correlation skeleton used by V-well (shielding-robust
 # collider cue alongside the evolving adjacency).
 _VWELL_SKELETON_THRESHOLD = 0.10
+
+# Exact normal quantile constants for common two-sided alphas; falls back to
+# Acklam's rational approximation when scipy is not needed.
+_Z_CRIT_TABLE: dict[float, float] = {
+    0.001: 3.2905267314919255,
+    0.005: 2.807033768343811,
+    0.01: 2.5758293035489004,
+    0.02: 2.3263478740408408,
+    0.05: 1.959963984540054,
+    0.10: 1.6448536269514722,
+}
+
+
+def _norm_ppf(p: float) -> float:
+    """Standard normal inverse CDF ``Phi^{-1}(p)`` for ``p in (0, 1)``."""
+    try:
+        from scipy.stats import norm  # type: ignore[import-untyped]
+
+        return float(norm.ppf(p))
+    except ImportError:  # pragma: no cover - fallback when scipy is absent
+        # Acklam rational approximation (max abs error < 1.15e-9).
+        a = (
+            -3.969683028665376e01,
+            2.209460984245205e02,
+            -2.759285104469687e02,
+            1.383577518672690e02,
+            -3.066479806614716e01,
+            2.506628277459239e00,
+        )
+        b = (
+            -5.447609879822406e01,
+            1.615858368580409e02,
+            -1.556989798598866e02,
+            6.680131188771972e01,
+            -1.328068155288572e01,
+        )
+        c = (
+            -7.784894002430293e-03,
+            -3.223964580411365e-01,
+            -2.400758277161838e00,
+            -2.549732539343734e00,
+            4.374664141464968e00,
+            2.938163982698783e00,
+        )
+        d = (
+            7.784695709041462e-03,
+            3.224671290700398e-01,
+            2.445134137142996e00,
+            3.754408661907416e00,
+        )
+        plow = 0.02425
+        phigh = 1.0 - plow
+        if p < plow:
+            q = math.sqrt(-2.0 * math.log(p))
+            return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+                (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
+            )
+        if p <= phigh:
+            q = p - 0.5
+            r = q * q
+            return (
+                (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+            ) / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / (
+            (((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0
+        )
+
+
+def fisher_z_threshold(
+    n_samples: int,
+    k_cond: int = 3,
+    alpha: float = 0.01,
+) -> float:
+    """Sample-size-adaptive partial-correlation threshold via Fisher's z-transform.
+
+    Computes ``tanh(z_crit / sqrt(max(n_samples - k_cond - 3, 1)))`` where
+    ``z_crit = Phi^{-1}(1 - alpha / 2)`` is the two-sided standard normal
+    critical value at significance level ``alpha``.
+    """
+    if n_samples < 1:
+        raise ValueError(f"n_samples must be >= 1, got {n_samples}")
+    if k_cond < 0:
+        raise ValueError(f"k_cond must be >= 0, got {k_cond}")
+    if not (0.0 < alpha < 1.0):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    z_crit = _Z_CRIT_TABLE.get(float(alpha))
+    if z_crit is None:
+        z_crit = _norm_ppf(1.0 - float(alpha) / 2.0)
+    dof = max(int(n_samples) - int(k_cond) - 3, 1)
+    return float(math.tanh(z_crit / math.sqrt(dof)))
+
+
+def dag_to_cpdag(A: np.ndarray) -> np.ndarray:
+    """Convert a DAG adjacency matrix to its Completed Partially Directed Acyclic Graph (CPDAG).
+
+    Implements the Chickering / Meek DAG-to-CPDAG conversion:
+
+    1. Start from the undirected skeleton of ``A`` (all edges bidirectional).
+    2. Orient unshielded colliders (v-structures) ``i -> k <- j`` where ``i``
+       and ``j`` are non-adjacent in the skeleton.
+    3. Repeatedly close under Meek's orientation rules R1--R3 until convergence,
+       leaving all remaining Markov-equivalent edges undirected
+       (``C[i, j] = C[j, i] = 1``).
+    """
+    A_arr = np.asarray(A, dtype=np.float64)
+    if A_arr.ndim != 2 or A_arr.shape[0] != A_arr.shape[1]:
+        raise ValueError("A must be a square adjacency matrix")
+    n = A_arr.shape[0]
+    D = (A_arr > 0).astype(bool)
+    np.fill_diagonal(D, False)
+    U = D | D.T
+    np.fill_diagonal(U, False)
+
+    C = U.astype(np.float64)
+    eye = np.eye(n, dtype=bool)
+    # 1. Preserve unshielded v-structures i -> k <- j with i, j non-adjacent.
+    v_pairs = D[:, None, :] & D[None, :, :] & (~U[:, :, None]) & (~eye[:, :, None])
+    has_v_into = np.any(v_pairs, axis=1)
+    C = np.where(has_v_into.T & (~has_v_into), 0.0, C)
+
+    # 2. Close under Meek rules R1-R3.
+    while True:
+        directed = (C > 0) & (C.T == 0)
+        undirected = (C > 0) & (C.T > 0)
+        adj = (C > 0) | (C.T > 0)
+        non_adj = (~adj) & (~eye)
+
+        # R1: orient i -> j if exists k with k -> i and k not adjacent to j.
+        r1 = np.any(directed.T[:, :, None] & non_adj[None, :, :], axis=1)
+        # R2: orient i -> j if exists k with i -> k and k -> j.
+        r2 = np.any(directed[:, :, None] & directed[None, :, :], axis=1)
+        # R3: orient i -> j if exists non-adjacent k, l with i - k, i - l, k -> j, l -> j.
+        cand = undirected[:, :, None] & directed[None, :, :]
+        r3 = np.any(
+            cand[:, :, None, :] & cand[:, None, :, :] & non_adj[None, :, :, None],
+            axis=(1, 2),
+        )
+
+        orient_ij = undirected & (r1 | r2 | r3)
+        orient_ij = orient_ij & (~orient_ij.T)
+        if not np.any(orient_ij):
+            break
+        C = np.where(orient_ij.T, 0.0, C)
+
+    return C
 
 
 def _cov_node_keys(Cov: np.ndarray, dtype: np.dtype) -> np.ndarray:
@@ -191,8 +341,11 @@ def _union_neighbor_sets(
     J: np.ndarray,
     k: int,
     Cov: np.ndarray,
+    *,
+    E: np.ndarray | None = None,
+    threshold_death: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Top-``k`` neighbors ranked by ``|R[i,z]| + |R[j,z]|`` (no elev. mask)."""
+    """Top-``k`` neighbors ranked by ``|R[i,z]| + |R[j,z]|`` with collider down-weighting."""
     M = I.shape[0]
     if M == 0:
         return np.full((0, k), -1, dtype=np.intp), np.zeros(0, dtype=np.intp)
@@ -201,7 +354,18 @@ def _union_neighbor_sets(
     mask[np.arange(M), I] = False
     mask[np.arange(M), J] = False
     R = _correlation_matrix(Cov)
-    scores = np.abs(R[I]) + np.abs(R[J])
+    abs_R = np.abs(R)
+    if threshold_death is not None:
+        corr_connected = (abs_R[I] >= float(threshold_death)) | (
+            abs_R[J] >= float(threshold_death)
+        )
+        mask = mask & corr_connected
+    scores = abs_R[I] + abs_R[J]
+    if E is not None:
+        below_both = E[None, :] < (
+            np.minimum(E[I, None], E[J, None]) - _COLLIDER_ELEV_MARGIN
+        )
+        scores = np.where(below_both, scores * _COLLIDER_SCORE_WEIGHT, scores)
     return _topk_by_score(mask, scores, k)
 
 
@@ -299,6 +463,8 @@ def step(
     threshold_death: float = 0.05,
     threshold_birth: float = 0.15,
     k: int = 2,
+    n_samples: int | None = None,
+    alpha: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """One Bayesian CA tick: gravity, V-well, death, then birth.
 
@@ -318,6 +484,13 @@ def step(
         Birth candidate edges with ``|rho|`` above this value.
     k:
         Cap on conditioning-set size ``|Z|`` (default 2).
+    n_samples:
+        Optional sample count ``n``. When provided and ``threshold_death`` /
+        ``threshold_birth`` are left at their defaults, thresholds are calibrated
+        via :func:`fisher_z_threshold`.
+    alpha:
+        Optional two-sided significance level for :func:`fisher_z_threshold`
+        (default ``0.01`` when ``n_samples`` is provided).
 
     Returns
     -------
@@ -336,6 +509,14 @@ def step(
         raise ValueError(f"Cov must have shape ({N}, {N}), got {Cov.shape}")
     if k < 0:
         raise ValueError("k must be non-negative")
+
+    if n_samples is not None:
+        alpha_val = 0.01 if alpha is None else float(alpha)
+        fz_death = fisher_z_threshold(int(n_samples), k_cond=k, alpha=alpha_val)
+        if threshold_death == 0.05:
+            threshold_death = fz_death
+        if threshold_birth == 0.15:
+            threshold_birth = 1.2 * threshold_death
 
     # --- 1. Gravity: raw downhill, then local-margin drift -------------------
     A *= E[:, None] > E[None, :]
@@ -356,7 +537,9 @@ def step(
     U = _undirected_neighbors(A)
     I, J = np.nonzero(A > 0)
     if I.size:
-        Z, counts = _union_neighbor_sets(U, I, J, k, Cov)
+        Z, counts = _union_neighbor_sets(
+            U, I, J, k, Cov, E=E, threshold_death=threshold_death
+        )
         rho = _batched_partial_corr(Cov, I, J, Z, counts)
         kill = np.abs(rho) < threshold_death
         if np.any(kill):
@@ -368,7 +551,9 @@ def step(
     np.fill_diagonal(undirected_absent, False)
     Bi, Bj = np.nonzero(np.triu(undirected_absent, k=1))
     if Bi.size:
-        Z, counts = _union_neighbor_sets(U, Bi, Bj, k, Cov)
+        Z, counts = _union_neighbor_sets(
+            U, Bi, Bj, k, Cov, E=E, threshold_death=threshold_death
+        )
         rho = _batched_partial_corr(Cov, Bi, Bj, Z, counts)
         strong = np.abs(rho) > threshold_birth
         e_tb = _tiebreak_elevation(E, Cov)
