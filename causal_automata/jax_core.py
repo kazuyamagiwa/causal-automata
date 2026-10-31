@@ -117,6 +117,53 @@ def _correlation_matrix(Cov: jnp.ndarray) -> jnp.ndarray:
     return Cov / (std[:, None] * std[None, :])
 
 
+def _partial_corr_conditioned_1(R: jnp.ndarray) -> jnp.ndarray:
+    """Closed-form 1-node partial correlations ``P[a, b, m] = rho(a, b | m)``."""
+    r_ab = R[:, :, None]
+    r_am = R[:, None, :]
+    r_bm = R[None, :, :]
+    denom = jnp.sqrt(
+        jnp.maximum((1.0 - r_am**2) * (1.0 - r_bm**2), _STD_FLOOR)
+    )
+    return (r_ab - r_am * r_bm) / denom
+
+
+def _berkson_mask_pairwise(
+    R: jnp.ndarray,
+    E: jnp.ndarray | None = None,
+) -> jnp.ndarray:
+    """Boolean ``(i, j, m)``: ``m`` is a Berkson collider / sink for ``(i, j)``."""
+    P = _partial_corr_conditioned_1(R)
+    berkson = jnp.abs(P) > (jnp.abs(R)[:, :, None] + _EXPLAIN_AWAY_MARGIN)
+    if E is not None:
+        margin = jnp.asarray(_COLLIDER_ELEV_MARGIN, dtype=E.dtype)
+        below_both = E[None, None, :] < (
+            jnp.minimum(E[:, None, None], E[None, :, None]) - margin
+        )
+        berkson = berkson | below_both
+    return berkson
+
+
+def _s1_min_abs_rho_pairwise(
+    R: jnp.ndarray,
+    U: jnp.ndarray,
+    E: jnp.ndarray | None = None,
+) -> jnp.ndarray:
+    """Exact ``s=1`` screen: ``min_m |rho(i, j | m)|`` over skeleton neighbors."""
+    n = R.shape[0]
+    idx = jnp.arange(n)
+    P = _partial_corr_conditioned_1(R)
+    abs_P = jnp.abs(P)
+    valid = (U[:, None, :] > 0) | (U[None, :, :] > 0)
+    valid = valid & (idx[None, None, :] != idx[:, None, None])
+    valid = valid & (idx[None, None, :] != idx[None, :, None])
+    valid = valid & (~_berkson_mask_pairwise(R, E=E))
+    filled = jnp.where(valid, abs_P, jnp.inf)
+    min_rho = filled.min(axis=-1)
+    any_valid = valid.any(axis=-1)
+    return jnp.where(any_valid, min_rho, jnp.abs(R))
+
+
 def _pairwise_topk_Z(
     U: jnp.ndarray,
     Cov: jnp.ndarray,
@@ -126,21 +173,21 @@ def _pairwise_topk_Z(
     threshold_death: float | jnp.ndarray | None = None,
     *,
     require_common_nbr: bool = False,
+    endpoint_local: str | None = None,
+    exclude_berkson: bool = True,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Top-``k`` mutual neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)``.
+    """Top-``k`` neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)``.
 
-    Requires candidate separators ``z`` to be correlated with **both**
-    endpoints ``i`` and ``j`` (``(|R[i,z]| >= threshold_death) &
-    (|R[j,z]| >= threshold_death)``) so one-sided siblings/children are not
-    pulled into ``S_{i,j}``. When ``require_common_nbr=True`` (used for
-    ``s >= 2`` subsets), ``z`` must also be adjacent to both ``i`` and ``j``
-    in the current skeleton ``U`` (``U[i,z] & U[j,z]``). Candidates sitting
-    clearly below both endpoints in ``E``
-    (``E[z] < jnp.minimum(E[i], E[j]) - 0.02``) are down-weighted.
+    ``endpoint_local='i'|'j'`` restricts the pool to one endpoint's neighbors
+    (PC-consistent). Berkson-inflating colliders are excluded by default.
     """
     n = U.shape[0]
     idx = jnp.arange(n)
-    if require_common_nbr:
+    if endpoint_local == "i":
+        pool = U[:, None, :] > 0
+    elif endpoint_local == "j":
+        pool = U[None, :, :] > 0
+    elif require_common_nbr:
         pool = (U[:, None, :] > 0) & (U[None, :, :] > 0)
     else:
         pool = (U[:, None, :] > 0) | (U[None, :, :] > 0)
@@ -153,13 +200,17 @@ def _pairwise_topk_Z(
 
     R = _correlation_matrix(Cov)
     abs_R = jnp.abs(R)
-    if threshold_death is not None:
+    if threshold_death is not None and endpoint_local is None:
         thr_d = jnp.asarray(threshold_death, dtype=abs_R.dtype)
         corr_mutual = (abs_R[:, None, :] >= thr_d) & (abs_R[None, :, :] >= thr_d)
         pool = pool & corr_mutual
 
+    if exclude_berkson:
+        pool = pool & (~_berkson_mask_pairwise(R, E=E))
+
     scores = jnp.minimum(abs_R[:, None, :], abs_R[None, :, :])
-    if E is not None:
+    if E is not None and not exclude_berkson:
+        # Legacy soft down-weight path when Berkson exclusion is off.
         margin = jnp.asarray(_COLLIDER_ELEV_MARGIN, dtype=E.dtype)
         weight = jnp.asarray(_COLLIDER_SCORE_WEIGHT, dtype=scores.dtype)
         below_both = E[None, None, :] < (
@@ -175,6 +226,53 @@ def _pairwise_topk_Z(
     jj = idx[None, :, None]
     valid = pool[ii, jj, Z]
     return Z, valid
+
+
+def _min_abs_rho_endpoint_combos_pairwise(
+    Cov: jnp.ndarray,
+    U: jnp.ndarray,
+    k: int,
+    s_max: jnp.ndarray | int,
+    *,
+    E: jnp.ndarray | None = None,
+    threshold_death: float | jnp.ndarray | None = None,
+    min_abs_rho: jnp.ndarray | None = None,
+) -> jnp.ndarray:
+    """PC-style ``s>=2`` screens over all size-``s`` combos per endpoint pool."""
+    import itertools
+
+    n = U.shape[0]
+    if min_abs_rho is None:
+        out = jnp.full((n, n), jnp.inf, dtype=Cov.dtype)
+    else:
+        out = min_abs_rho
+    if k < 2:
+        return out
+
+    s_max_arr = jnp.asarray(s_max, dtype=jnp.int32)
+    for side in ("i", "j"):
+        Z, valid = _pairwise_topk_Z(
+            U,
+            Cov,
+            k,
+            A=None,
+            E=E,
+            threshold_death=threshold_death,
+            endpoint_local=side,
+            exclude_berkson=True,
+        )
+        for s in range(2, k + 1):
+            for combo in itertools.combinations(range(k), s):
+                cols = list(combo)
+                Z_c = Z[..., cols]
+                v_c = valid[..., cols]
+                rho_s = jnp.abs(_pairwise_partial_corr(Cov, Z_c, v_c, s))
+                all_ok = v_c.all(axis=-1)
+                rho_s = jnp.where(all_ok, rho_s, jnp.inf)
+                out = jnp.where(
+                    s_max_arr >= s, jnp.minimum(out, rho_s), out
+                )
+    return out
 
 
 def _pairwise_partial_corr(
@@ -289,17 +387,6 @@ def _elevation_gravity_target(
     two_hop_mean = (mean_p2 + mean_c2) * 0.5
     discount = jnp.asarray(hop_discount, dtype=E.dtype)
     return local_mean + discount * (two_hop_mean - E)
-
-
-def _partial_corr_conditioned_1(R: jnp.ndarray) -> jnp.ndarray:
-    """Closed-form 1-node partial correlations ``P[a, b, m] = rho(a, b | m)``."""
-    r_ab = R[:, :, None]
-    r_am = R[:, None, :]
-    r_bm = R[None, :, :]
-    denom = jnp.sqrt(
-        jnp.maximum((1.0 - r_am**2) * (1.0 - r_bm**2), _STD_FLOOR)
-    )
-    return (r_ab - r_am * r_bm) / denom
 
 
 def _sepset_screened_by_second_node(
@@ -730,6 +817,7 @@ def _step_impl(
 
     # --- 3. Death -----------------------------------------------------------
     U = _undirected_neighbors(A, fuzzy=fuzzy)
+    R = _correlation_matrix(Cov)
     s_max = (
         jnp.asarray(k, dtype=jnp.int32)
         if tick is None
@@ -740,35 +828,19 @@ def _step_impl(
         v0 = jnp.zeros((n, n, 0), dtype=bool)
         min_abs_rho = jnp.abs(_pairwise_partial_corr(Cov, z0, v0, 0))
     else:
-        Z1, valid1 = _pairwise_topk_Z(
-            U,
-            Cov,
-            1,
-            A=None,
-            E=E,
-            threshold_death=death_t,
-            require_common_nbr=False,
-        )
-        min_abs_rho = jnp.abs(_pairwise_partial_corr(Cov, Z1, valid1, 1))
+        # Exact s=1 closed-form screen over ALL skeleton neighbors.
+        min_abs_rho = _s1_min_abs_rho_pairwise(R, U, E=E)
         if k >= 2:
-            Z_and, valid_and = _pairwise_topk_Z(
-                U,
+            # PC-consistent endpoint-local pools + all size-s combos.
+            min_abs_rho = _min_abs_rho_endpoint_combos_pairwise(
                 Cov,
+                U,
                 k,
-                A=None,
+                s_max,
                 E=E,
                 threshold_death=death_t,
-                require_common_nbr=True,
+                min_abs_rho=min_abs_rho,
             )
-            for s in range(2, k + 1):
-                rho_s = jnp.abs(
-                    _pairwise_partial_corr(
-                        Cov, Z_and[..., :s], valid_and[..., :s], s
-                    )
-                )
-                min_abs_rho = jnp.where(
-                    s_max >= s, jnp.minimum(min_abs_rho, rho_s), min_abs_rho
-                )
     existing = A > 0
     kill = existing & (min_abs_rho < death_t)
     if fuzzy:
@@ -778,39 +850,23 @@ def _step_impl(
 
     # --- 4. Birth: tie-broken elevation orientation -------------------------
     U = _undirected_neighbors(A, fuzzy=fuzzy)
+    R = _correlation_matrix(Cov)
     if k == 0:
         z0_b = jnp.zeros((n, n, 0), dtype=jnp.int32)
         v0_b = jnp.zeros((n, n, 0), dtype=bool)
         min_abs_rho_b = jnp.abs(_pairwise_partial_corr(Cov, z0_b, v0_b, 0))
     else:
-        Z1_b, valid1_b = _pairwise_topk_Z(
-            U,
-            Cov,
-            1,
-            A=None,
-            E=E,
-            threshold_death=death_t,
-            require_common_nbr=False,
-        )
-        min_abs_rho_b = jnp.abs(_pairwise_partial_corr(Cov, Z1_b, valid1_b, 1))
+        min_abs_rho_b = _s1_min_abs_rho_pairwise(R, U, E=E)
         if k >= 2:
-            Z_and_b, valid_and_b = _pairwise_topk_Z(
-                U,
+            min_abs_rho_b = _min_abs_rho_endpoint_combos_pairwise(
                 Cov,
+                U,
                 k,
-                A=None,
+                k,
                 E=E,
                 threshold_death=death_t,
-                require_common_nbr=True,
+                min_abs_rho=min_abs_rho_b,
             )
-            for s in range(2, k + 1):
-                rho_b_s = jnp.abs(
-                    _pairwise_partial_corr(
-                        Cov, Z_and_b[..., :s], valid_and_b[..., :s], s
-                    )
-                )
-                min_abs_rho_b = jnp.minimum(min_abs_rho_b, rho_b_s)
-    R = _correlation_matrix(Cov)
     if fuzzy:
         candidates = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
     else:

@@ -2,6 +2,34 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
+## [0.3.6] — 2026-10-31
+
+Denser-ER False Positive release: exact `s=1` closed-form screening over all
+skeleton neighbors, PC-consistent endpoint-local `s≥2` all-pairs conditioning,
+and Berkson collider exclusion from separator pools in `death` / `birth`.
+
+### Fixed
+
+- **Exact `s=1` Closed-Form Screen (`jax_core.py` & `bayesian.py`)** —
+  Death and birth no longer rely on top-1 of `_pairwise_topk_Z` /
+  `_union_neighbor_sets` for `s=1`. Using the vectorized 1-node partial
+  `rho(i, j | m)` over **all** current skeleton neighbors
+  `(U[i, m] | U[j, m])`, an edge is screened off if any single neighbor yields
+  `|rho| < threshold_death` (zero matrix inversions). Length-2 / length-3
+  single-separator treks can no longer survive because their true separator
+  was ranked #2+.
+- **PC-Consistent Endpoint-Local `s≥2` + All-Pairs Combos** —
+  Replaces `require_common_nbr=True` for `s≥2`. Candidate pools are built
+  separately from `U(i) \ {j}` and from `U(j) \ {i}` (never mixing one-sided
+  children across endpoints, which previously killed `4→13` via `{9,15}+{7}`).
+  Within each top-`k` pool, every size-`s` combination is tested (e.g. all
+  pairs `{z0,z1}`, `{z0,z2}`, `{z1,z2}` at `s=2`), so a collider in `z0`
+  cannot block a clean separator pair `{z1,z2}`.
+- **Berkson Collider Exclusion from Separator Pools** —
+  Nodes `m` with `|rho(i, j | m)| > |R[i, j]| + 0.02` (or elevation sinks
+  below both endpoints) are never admitted into `Z` for death/birth, blocking
+  moral ("married-parent") FPs opened by shared children.
+
 ## [0.3.5] — 2026-10-31
 
 Benchpress seed=1 orientation release: undirected final gravity projection and
