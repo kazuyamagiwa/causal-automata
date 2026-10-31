@@ -42,30 +42,36 @@ The JAX and NumPy ports
    at ``1.0`` / ``0.0`` (those saturated random inits and reversed
    chains). Optional ``multihop=True`` also pulls toward 2-hop means
    from :math:`A@A`.
-2. **V-well** — Acts on **elevations**, not adjacency. Shared neighbors
-   of marginally independent absent pairs (on the evolving undirected
-   adjacency **and** a static ``|R|`` correlation skeleton) are treated
-   as collider candidates and lowered with a multiplicative decay
-   :math:`E \leftarrow E\,(1-2\alpha)`. This replaces the older additive
-   ``E - 2\alpha`` slam into the ``E=0`` clip wall, which destroyed
-   near-floor orderings and drove even/odd SHD limit cycles. Separately,
-   :func:`causal_automata.jax_core.detect_colliders` exposes a stricter
-   explaining-away (Berkson) test for diagnostics. After V-well moves
-   :math:`E`, later birth / downhill projection prefer arrows into
-   sinks (:math:`i \to k \leftarrow j`).
-3. **Death** — For existing edges, estimate partial correlation given
-   the top-``k`` union neighbors ranked by
-   :math:`|R_{iz}| + |R_{jz}|` (Pearson correlation, scale-free). Kill
-   when :math:`|\rho| < \tau_{\mathrm{death}}`. This is a **heuristic**
-   separator (fixed ``k``, ``|R|`` ranking) — not
-   :math:`\min_Z I(X_i;X_j\mid Z)`. Raw elevation is **not** used to
-   mask candidates (that excluded true confounders under random ``E0``).
-4. **Birth** — For absent undirected pairs, birth when
-   :math:`|\rho| > \tau_{\mathrm{birth}}`, orienting with a
-   deterministic elevation tie-break so nodes clipped together at
-   ``0`` / ``1`` still get a direction. Tie-breaks use Cov-derived
-   node keys (diag + off-diagonal fingerprint), not raw index order.
-   A final bound-aware downhill projection keeps the DAG law.
+2. **V-well** — Acts on **elevations**, not adjacency. An unshielded
+   triple :math:`i{-}k{-}j` is a statistical collider when conditioning
+   on :math:`k` inflates partial correlation **and** no second node
+   :math:`m` screens :math:`(i,j)` given :math:`\{k,m\}` (closed-form
+   2-node Sepset / backdoor check). True collider centers sink below
+   :math:`\min(E_i,E_j)-\delta`; non-collider unshielded centers are
+   raised (anti-sink) so they cannot end as local elevation minima.
+   After V-well moves :math:`E`, later birth / downhill projection
+   prefer arrows into sinks (:math:`i \to k \leftarrow j`).
+3. **Death** — Progressive schedule
+   :math:`s_{\max}=\min(t+1,k)`. At ``s=1``, an **exact closed-form**
+   screen over **all** current skeleton neighbors
+   :math:`(U_{im}\lor U_{jm})` kills the edge if any single
+   :math:`|\rho(i,j\mid m)| < \tau_{\mathrm{death}}` (zero matrix
+   inversions). For ``s≥2``, PC-consistent **endpoint-local** top-``k``
+   pools are built separately from :math:`U(i)\setminus\{j\}` and
+   :math:`U(j)\setminus\{i\}` (never mixing one-sided children across
+   endpoints), and **all** size-``s`` combinations within each pool are
+   tested. Berkson-inflating colliders
+   (:math:`|\rho(i,j\mid m)| > |R_{ij}| + 0.02`) are excluded from
+   separator pools so moral ("married-parent") FPs cannot ride a shared
+   child.
+4. **Birth** — For absent undirected pairs, require
+   :math:`|R_{ij}| \ge \tau_{\mathrm{death}}` **and**
+   :math:`|\rho| > \tau_{\mathrm{birth}}` under the same Sepset gates,
+   orienting with a deterministic elevation tie-break so nodes clipped
+   together at ``0`` / ``1`` still get a direction. Tie-breaks use
+   Cov-derived node keys. A final downhill projection of the surviving
+   undirected skeleton :math:`U=\max(A,A^\top)` keeps the DAG law and
+   reverses mid-tick elevation flips instead of wiping edges.
 
 **Initialization (L4).** Benchmark / synth defaults use a symmetric
 correlation skeleton ``A0`` (``|R_{ij}| > \tau_{\mathrm{birth}}``) and
@@ -81,38 +87,67 @@ gravity / V-well reshape ``E``; multihop gravity helps break some
 Markov-equivalence ties but does not remove that coupling.
 
 Default API thresholds are ``threshold_death=0.05``,
-``threshold_birth=0.15``, ``k=2``, ``learning_rate=0.1``. The synthetic /
-benchmark CLIs typically use ``threshold_birth=0.10`` and a
-**scale-aware** ``k`` (``3`` if :math:`N\le 50`, ``5`` if :math:`N>50`).
+``threshold_birth=0.15``, ``k=2``, ``learning_rate=0.1``. When fitting
+from samples via :class:`~causal_automata.CausalAutomaton`, thresholds
+are calibrated with
+:func:`~causal_automata.fisher_z_threshold`
+(:math:`\tau_{\mathrm{death}}=\tanh(z_{1-\alpha/2}/\sqrt{n-k-3})`,
+:math:`\tau_{\mathrm{birth}}=1.2\,\tau_{\mathrm{death}}`). The synthetic /
+benchmark CLIs typically use a **scale-aware** ``k``
+(``3`` if :math:`N\le 50`, ``5`` if :math:`N>50`).
 
 ``ticks`` (scan length in ``run``) and ``k`` (block size ``2+k``) are JIT
 **static** arguments — see :doc:`jax_static`.
+
+Closed-form Sepset algebra (v0.3.5–v0.3.6)
+-----------------------------------------
+
+The 1-node partial correlation used for ``s=1`` screens and explaining-
+away tests is
+
+.. math::
+
+   \rho(i,j\mid m)
+   = \frac{R_{ij}-R_{im}R_{jm}}
+          {\sqrt{(1-R_{im}^2)(1-R_{jm}^2)}}.
+
+The 2-node recursion (Sepset / backdoor check; zero inversions) is
+
+.. math::
+
+   \rho(i,j\mid k,m)
+   = \frac{\rho(i,j\mid m)-\rho(i,k\mid m)\,\rho(j,k\mid m)}
+          {\sqrt{\bigl(1-\rho(i,k\mid m)^2\bigr)
+                 \bigl(1-\rho(j,k\mid m)^2\bigr)}}.
 
 Complexity
 ----------
 
 * **Downhill acyclicity projection** is :math:`O(N^2)` and avoids
   :math:`O(N^3)` matrix-exponential / spectral DAG penalties.
-* A full tick also builds dense pair×candidate score tensors and
-  batched ``(2+k)×(2+k)`` inversions, so wall-clock work scales closer
-  to :math:`O(N^3)` (with a ``\log N`` factor from per-pair top-``k``
-  sorts) at large ``N``.
+* Exact ``s=1`` screens are :math:`O(N^3)` tensor reductions with **no**
+  matrix inversions. ``s≥2`` still builds dense pair×candidate score
+  tensors and batched ``(2+s)×(2+s)`` inversions over endpoint-local
+  combinations, so wall-clock work scales closer to :math:`O(N^3)` at
+  large ``N``.
 
 GPU / accelerator matrix computation
 ------------------------------------
 
 For continuous linear-Gaussian data, CMI relates to partial correlation.
-The engine precomputes a global covariance and, each tick, forms
-batched sub-covariances for many edges at once. Inverting those blocks
-yields precision matrices whose off-diagonals give :math:`\rho`.
+The engine precomputes a global covariance / correlation and, each tick,
+forms closed-form ``s=1`` tensors plus batched sub-covariances for
+``s≥2`` endpoint-local combos. Inverting those blocks yields precision
+matrices whose off-diagonals give :math:`\rho`.
 
 ============= ======================================= =====================================
 Component     Structure                               JAX / NumPy operation
 ============= ======================================= =====================================
 State         :math:`N \times N`                      Array update / ``jax.lax``-friendly
-Death / birth Ranked :math:`Z`, :math:`\rho`          Batched ``linalg.inv`` ``(2+k)``
-V-wells       Shared-neighbor independence sinks      Boolean reductions on ``E``
-Gravity       Local-margin means + downhill mask      Element-wise / optional ``A@A``
+Death ``s=1`` All-neighbor :math:`\rho(\cdot\mid m)`  Closed-form tensor, no ``inv``
+Death ``s≥2`` Endpoint-local combos                   Batched ``linalg.inv`` ``(2+s)``
+V-wells       Explaining-away + Sepset + anti-sink    Boolean / soft updates on ``E``
+Gravity       Local-margin means + :math:`U` downhill Element-wise / optional ``A@A``
 DAG law       Elevations                              Hard downhill + bound tie-break
 ============= ======================================= =====================================
 

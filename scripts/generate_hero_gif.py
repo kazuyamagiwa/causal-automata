@@ -3,14 +3,15 @@
 
 Records a short JAX CA trajectory on the Phase-2 N=10 motif with the synth
 ``corr_flat`` default init (symmetric ``|R|`` skeleton + near-flat
-``E0 ≈ 0.5``) and writes:
+``E0 ≈ 0.5``) under **v0.3.6** dynamics (progressive ``s_max``, closed-form
+``s=1`` screens, endpoint-local ``s≥2``, V-well / anti-sink) and writes:
 
 * ``assets/elevation_convergence.gif`` — primary README embed
 * ``assets/elevation_convergence.mp4`` — iPhone / reduced-motion fallback
 
-The GIF opens on a flat elevation plateau; gravity / V-well then separate
-roots upward and colliders downward. GitHub often freezes animated GIFs when
-accessibility reduced-motion is on — the MP4 is a tap-to-play fallback.
+Each frame overlays ``Tick t | s_max | Edges | Skeleton F1 | Pattern F1``.
+GitHub often freezes animated GIFs when accessibility reduced-motion is on —
+the MP4 is a tap-to-play fallback.
 
 Usage::
 
@@ -38,6 +39,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from causal_automata.bayesian import dag_to_cpdag, fisher_z_threshold  # noqa: E402
 from causal_automata.bayesian_synth import (  # noqa: E402
     edge_metrics,
     prepare_synthetic_bundle,
@@ -54,12 +56,11 @@ TICKS = 100
 HOLD_FINAL = 14
 SEED = 42
 K = 3
+N_SAMPLES = 1000  # Fisher-z calibration for the hero SEM
 FPS = 10
 DPI = 110
 FIGSIZE = (11, 5)
 LEARNING_RATE = 0.10
-THRESHOLD_BIRTH = 0.10
-THRESHOLD_DEATH = 0.05
 # Multihop compresses the elevation field; leave off so the plateau → strata
 # separation stays visible in the README clip.
 MULTIHOP = False
@@ -73,6 +74,9 @@ FP_COLOR = "#ef4444"
 PLATEAU_COLOR = "#64748b"
 MAX_GIF_BYTES = 5 * 1024 * 1024
 MAX_MP4_BYTES = 10 * 1024 * 1024
+
+THRESHOLD_DEATH = fisher_z_threshold(N_SAMPLES, k_cond=K, alpha=0.01)
+THRESHOLD_BIRTH = 1.2 * THRESHOLD_DEATH
 
 
 def build_hero_problem(
@@ -103,14 +107,15 @@ def run_trajectory(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Scan CA ticks and return histories including the t=0 initial state.
 
-    Instead of discarding intermediates with ``return (A, E), None``, the
-    scan body yields ``(A_next, E_next)`` so callers can animate every frame.
+    Passes progressive ``tick`` so ``s_max = min(tick + 1, k)`` matches the
+    v0.3.6 death schedule used by :class:`~causal_automata.CausalAutomaton`.
     """
     A0_j = jnp.asarray(A0, dtype=jnp.float64)
     E0_j = jnp.asarray(E0, dtype=jnp.float64)
     Cov_j = jnp.asarray(Cov, dtype=jnp.float64)
+    ticks_j = jnp.arange(ticks, dtype=jnp.int32)
 
-    def body(carry, _):
+    def body(carry, tick):
         A, E = carry
         A_next, E_next = step(
             A,
@@ -121,12 +126,11 @@ def run_trajectory(
             threshold_death=THRESHOLD_DEATH,
             learning_rate=LEARNING_RATE,
             multihop=MULTIHOP,
+            tick=tick,
         )
         return (A_next, E_next), (A_next, E_next)
 
-    (_, _), (A_hist, E_hist) = jax.lax.scan(
-        body, (A0_j, E0_j), xs=None, length=ticks
-    )
+    (_, _), (A_hist, E_hist) = jax.lax.scan(body, (A0_j, E0_j), xs=ticks_j)
 
     # Prepend tick-0 plateau so the GIF starts flat / undirected.
     A_full = np.concatenate(
@@ -151,20 +155,34 @@ def _structural_hamming(A_pred: np.ndarray, A_true: np.ndarray) -> int:
     return n_extra + n_missing + n_rev
 
 
+def _n_undirected_edges(A: np.ndarray) -> int:
+    U = ((A > 0.5) | (A.T > 0.5)) & ~np.eye(A.shape[0], dtype=bool)
+    return int(np.sum(np.triu(U, k=1)))
+
+
 def compute_metrics(
     A_hist: np.ndarray, A_true: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-tick SHD, skeleton F1, directed F1."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per-tick SHD, skeleton F1, directed F1, pattern F1, edge count, s_max."""
     T = A_hist.shape[0]
+    cpdag_true = dag_to_cpdag(A_true)
     shd = np.zeros(T, dtype=np.float64)
     sk_f1 = np.zeros(T, dtype=np.float64)
     dir_f1 = np.zeros(T, dtype=np.float64)
+    pat_f1 = np.zeros(T, dtype=np.float64)
+    n_edges = np.zeros(T, dtype=np.int32)
+    s_max = np.zeros(T, dtype=np.int32)
     for t in range(T):
         A_t = A_hist[t]
         shd[t] = _structural_hamming(A_t, A_true)
         sk_f1[t] = skeleton_metrics(A_t, A_true).f1
         dir_f1[t] = edge_metrics(A_t, A_true).f1
-    return shd, sk_f1, dir_f1
+        pat_f1[t] = edge_metrics(dag_to_cpdag(A_t), cpdag_true).f1
+        n_edges[t] = _n_undirected_edges(A_t)
+        # Frame 0 is the initial state (no death yet); frames 1.. use tick=0..
+        tick = max(t - 1, 0)
+        s_max[t] = min(tick + 1, K) if K > 0 else 0
+    return shd, sk_f1, dir_f1, pat_f1, n_edges, s_max
 
 
 def _node_x_coords(n: int = N) -> np.ndarray:
@@ -286,7 +304,7 @@ def render_animation(
     fps: int = FPS,
 ) -> tuple[Path, Path]:
     """Two-panel dark-theme animation → GIF + MP4."""
-    shd, sk_f1, dir_f1 = compute_metrics(A_hist, A_true)
+    shd, sk_f1, dir_f1, pat_f1, n_edges, s_max = compute_metrics(A_hist, A_true)
     n_ticks = A_hist.shape[0]  # ticks+1 (includes t=0)
 
     x_coords = _node_x_coords(N)
@@ -320,7 +338,7 @@ def render_animation(
     ax_f1 = ax_met.twinx()
 
     fig.suptitle(
-        "causal-automata  ·  corr_flat init  ·  E≈0.5 plateau → strata",
+        "causal-automata v0.3.6  ·  corr_flat init  ·  E≈0.5 plateau → strata",
         color=FG,
         fontsize=11,
         y=0.97,
@@ -368,7 +386,7 @@ def render_animation(
 
     (shd_line,) = ax_met.plot([], [], color="#38bdf8", lw=1.6, label="SHD")
     (sk_line,) = ax_f1.plot([], [], color="#a78bfa", lw=1.4, label="Skeleton F1")
-    (dir_line,) = ax_f1.plot([], [], color=TP_COLOR, lw=1.4, label="Directed F1")
+    (pat_line,) = ax_f1.plot([], [], color=TP_COLOR, lw=1.4, label="Pattern F1")
     ax_met.set_xlim(0, n_ticks - 1)
     ax_met.set_ylim(0, max(float(shd.max()) * 1.15, 1.0))
     ax_met.set_xlabel("tick", fontsize=8, color=MUTED)
@@ -376,8 +394,8 @@ def render_animation(
     ax_f1.set_ylim(0, 1.05)
     ax_f1.set_ylabel("F1", fontsize=8, color=MUTED)
     ax_met.legend(
-        [shd_line, sk_line, dir_line],
-        ["SHD", "Skeleton F1", "Directed F1"],
+        [shd_line, sk_line, pat_line],
+        ["SHD", "Skeleton F1", "Pattern F1"],
         loc="upper right",
         fontsize=7,
         frameon=False,
@@ -393,6 +411,7 @@ def render_animation(
         va="top",
         fontsize=8,
         color=MUTED,
+        family="DejaVu Sans Mono",
     )
 
     scat = ax_dag.scatter(
@@ -456,7 +475,7 @@ def render_animation(
 
     def init():
         _draw_edges(A_hist[0], E_hist[0])
-        return (scat, tick_text, shd_line, sk_line, dir_line, *elev_lines, *labels_txt)
+        return (scat, tick_text, shd_line, sk_line, pat_line, *elev_lines, *labels_txt)
 
     def update(frame_t: int):
         E_t = E_hist[frame_t]
@@ -474,13 +493,15 @@ def render_animation(
 
         shd_line.set_data(xs, shd[: frame_t + 1])
         sk_line.set_data(xs, sk_f1[: frame_t + 1])
-        dir_line.set_data(xs, dir_f1[: frame_t + 1])
+        pat_line.set_data(xs, pat_f1[: frame_t + 1])
 
         tick_text.set_text(
-            f"t = {frame_t}   SHD = {int(shd[frame_t])}   "
-            f"Dir F1 = {dir_f1[frame_t]:.2f}"
+            f"Tick {frame_t}  |  s_max={int(s_max[frame_t])}  |  "
+            f"Edges={int(n_edges[frame_t])}  |  "
+            f"Skeleton F1={sk_f1[frame_t]:.3f}  |  "
+            f"Pattern F1={pat_f1[frame_t]:.3f}"
         )
-        return (scat, tick_text, shd_line, sk_line, dir_line, *elev_lines, *labels_txt)
+        return (scat, tick_text, shd_line, sk_line, pat_line, *elev_lines, *labels_txt)
 
     # Render ticks only here; exporters append the end hold.
     anim = animation.FuncAnimation(
@@ -514,7 +535,9 @@ def main() -> int:
         f"Building Phase-2 N={N} motif (seed={SEED}, corr_flat, "
         f"permute_nodes=True)…"
     )
-    A_true, Cov, A0, E0 = build_hero_problem()
+    A_true, Cov, A0, E0 = build_hero_problem(
+        skeleton_threshold=float(THRESHOLD_BIRTH)
+    )
     n_true = int(A_true.sum())
     print(f"  true edges: {n_true}")
     print(
@@ -524,20 +547,22 @@ def main() -> int:
     )
     print(
         f"  ticks={TICKS}  k={K}  lr={LEARNING_RATE}  "
-        f"multihop={MULTIHOP}"
+        f"multihop={MULTIHOP}  thr_d={THRESHOLD_DEATH:.4f}  "
+        f"thr_b={THRESHOLD_BIRTH:.4f}"
     )
 
-    print("Recording trajectory via jax.lax.scan…")
+    print("Recording trajectory via jax.lax.scan (progressive tick)…")
     A_hist, E_hist = run_trajectory(A0, E0, Cov, ticks=TICKS, k=K)
     print(
         f"  E0→E_final spread: std {float(E_hist[0].std()):.2e} → "
         f"{float(E_hist[-1].std()):.3f}  "
         f"(min={float(E_hist[-1].min()):.3f}, max={float(E_hist[-1].max()):.3f})"
     )
-    shd, sk_f1, dir_f1 = compute_metrics(A_hist, A_true)
+    shd, sk_f1, dir_f1, pat_f1, n_edges, _ = compute_metrics(A_hist, A_true)
     print(
         f"  final SHD={int(shd[-1])}  "
-        f"skel F1={sk_f1[-1]:.3f}  dir F1={dir_f1[-1]:.3f}"
+        f"skel F1={sk_f1[-1]:.3f}  dir F1={dir_f1[-1]:.3f}  "
+        f"pattern F1={pat_f1[-1]:.3f}  edges={int(n_edges[-1])}"
     )
 
     print("Rendering animation assets (GIF + MP4)…")
