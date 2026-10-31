@@ -2,6 +2,29 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
+## [0.3.3] — 2026-10-31
+
+Benchpress edge-level root-cause fix release: marginal correlation guard in
+`birth`, mutual-separator scoring, and progressive subset screening in `death`.
+
+### Fixed
+
+- **Marginal correlation guard in `birth` (`jax_core.py` & `bayesian.py`)** —
+  absent pairs `(i, j)` with near-zero marginal correlation
+  (`|R[i, j]| < threshold_death`) are no longer born when conditioning on a
+  top-``k`` set opens a spurious collider path (`|rho_{i,j|S}| > threshold_birth`),
+  eliminating Berkson phantom births.
+- **Mutual-separator scoring in `_pairwise_topk_Z` / `_union_neighbor_sets`** —
+  conditioning candidates `m` for pair `(i, j)` must be marginally correlated
+  with **both** endpoints (`(|R_{i,m}| >= threshold_death) & (|R_{j,m}| >= threshold_death)`)
+  and are ranked by mutual connection strength `min(|R_{i,m}|, |R_{j,m}|)`
+  (with `0.05` down-weighting when `E[m] < min(E[i], E[j]) - 0.02`), preventing
+  one-sided siblings/children from crowding into `S_{i,j}` and killing true edges.
+- **Progressive subset screening in `death`** — conditional independence is
+  evaluated across subset sizes `s = 1 .. k` (`min_{1 <= s <= k} |rho(i, j | Z_{:s})| < threshold_death`)
+  so single-mediator chains and forks are cleanly screened off by their top
+  mutual separator `Z_1` without collider pollution from extra slots in `Z_k`.
+
 ## [0.3.2] — 2026-10-31
 
 Benchpress calibration release: sample-size-adaptive Fisher-z thresholds,

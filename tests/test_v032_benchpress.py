@@ -37,7 +37,7 @@ from causal_automata.jax_core import (  # noqa: E402
 
 
 def test_version_is_0_3_2() -> None:
-    assert __version__ == "0.3.2"
+    assert __version__ == "0.3.3"
 
 
 def test_fisher_z_threshold_formula_and_calibration() -> None:
@@ -194,3 +194,97 @@ def test_erdos_renyi_p20_n1000_gaussian_benchmark_and_parity() -> None:
     assert sk_metrics.f1 >= 0.90
     assert dir_metrics.f1 >= 0.50
     assert pattern_metrics.f1 >= 0.75
+
+
+def test_berkson_birth_marginal_correlation_guard() -> None:
+    """v0.3.3 Fix 1: marginally independent pairs (|R| < thr_death) are never born via collider conditioning."""
+    # Unshielded collider 0 -> 2 <- 1 with elevated E[2] = 0.90 (so node 2 is NOT
+    # down-weighted by elevation). Marginally R[0, 1] = 0.0 < thr_death, but
+    # partial correlation |rho_{0,1 | 2}| = 0.36 / (1 - 0.36) = 0.5625 > thr_birth.
+    Cov = np.array(
+        [
+            [1.00, 0.00, 0.60],
+            [0.00, 1.00, 0.60],
+            [0.60, 0.60, 1.00],
+        ],
+        dtype=np.float64,
+    )
+    A0 = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    E0 = np.array([0.60, 0.40, 0.90], dtype=np.float64)
+
+    A_np, E_np = numpy_step(
+        A0, E0, Cov, threshold_death=0.05, threshold_birth=0.15, k=1
+    )
+    A_jx, E_jx = jax_step(
+        jnp.asarray(A0),
+        jnp.asarray(E0),
+        jnp.asarray(Cov),
+        threshold_death=0.05,
+        threshold_birth=0.15,
+        k=1,
+    )
+    A_jx_np = np.asarray(A_jx)
+    assert A_np[0, 1] == 0.0 and A_np[1, 0] == 0.0
+    assert A_jx_np[0, 1] == 0.0 and A_jx_np[1, 0] == 0.0
+    assert np.array_equal(A_np > 0, A_jx_np > 0)
+    np.testing.assert_allclose(E_np, np.asarray(E_jx), rtol=1e-6, atol=1e-6)
+
+
+def test_mutual_separator_and_progressive_death_screening() -> None:
+    """v0.3.3 Fix 2: mutual separator filtering & progressive s=1..k death prune chain/fork shortcuts without killing true edges."""
+    # 4-node graph:
+    #   True chain 0 -> 1 -> 2, plus common child 3 of (0, 2): 0 -> 3 <- 2.
+    #   For shortcut edge (0, 2):
+    #     - Node 1 is the true mutual mediator (screens off 0 and 2 at s=1: rho_{0,2 | 1} = 0).
+    #     - Node 3 is a collider for (0, 2) with slightly smaller mutual |R| than node 1,
+    #       so Z_1 = [1] and Z_2 = [1, 3].
+    #     - Conditioning on Z_2 = [1, 3] re-opens (0, 2) via collider 3 (|rho_{0,2 | 1,3}| > thr_death),
+    #       whereas progressive s=1 checks Z_1 = [1] first (|rho_{0,2 | 1}| = 0 < thr_death) and kills (0, 2)!
+    rng = np.random.default_rng(123)
+    n_samples = 4000
+    X0 = rng.normal(size=n_samples)
+    X1 = 0.80 * X0 + rng.normal(scale=0.5, size=n_samples)
+    X2 = 0.80 * X1 + rng.normal(scale=0.5, size=n_samples)
+    X3 = 0.45 * X0 + 0.45 * X2 + rng.normal(scale=0.5, size=n_samples)
+    X = np.column_stack([X0, X1, X2, X3])
+    Cov = empirical_covariance(X)
+
+    # Start with all forward edges including the false shortcut 0 -> 2;
+    # keep E[3] high (0.55) so collider 3 is still selected as the 2nd mutual neighbor in Z_2.
+    A0 = np.array(
+        [
+            [0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    E0 = np.array([0.90, 0.70, 0.50, 0.55], dtype=np.float64)
+
+    A_np, E_np = numpy_step(
+        A0, E0, Cov, threshold_death=0.05, threshold_birth=0.15, k=2
+    )
+    A_jx, E_jx = jax_step(
+        jnp.asarray(A0),
+        jnp.asarray(E0),
+        jnp.asarray(Cov),
+        threshold_death=0.05,
+        threshold_birth=0.15,
+        k=2,
+    )
+    A_jx_np = np.asarray(A_jx)
+
+    # Shortcut 0 -> 2 is pruned via s=1 mutual mediator {1}, while true edges 0 -> 1 and 1 -> 2 survive.
+    assert A_np[0, 2] == 0.0 and A_jx_np[0, 2] == 0.0
+    assert A_np[0, 1] == 1.0 and A_np[1, 2] == 1.0
+    assert np.array_equal(A_np > 0, A_jx_np > 0)
+    np.testing.assert_allclose(E_np, np.asarray(E_jx), rtol=1e-6, atol=1e-6)
+

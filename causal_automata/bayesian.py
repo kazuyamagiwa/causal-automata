@@ -345,7 +345,7 @@ def _union_neighbor_sets(
     E: np.ndarray | None = None,
     threshold_death: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Top-``k`` neighbors ranked by ``|R[i,z]| + |R[j,z]|`` with collider down-weighting."""
+    """Top-``k`` mutual neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)`` with collider down-weighting."""
     M = I.shape[0]
     if M == 0:
         return np.full((0, k), -1, dtype=np.intp), np.zeros(0, dtype=np.intp)
@@ -356,11 +356,10 @@ def _union_neighbor_sets(
     R = _correlation_matrix(Cov)
     abs_R = np.abs(R)
     if threshold_death is not None:
-        corr_connected = (abs_R[I] >= float(threshold_death)) | (
-            abs_R[J] >= float(threshold_death)
-        )
-        mask = mask & corr_connected
-    scores = abs_R[I] + abs_R[J]
+        thr_d = float(threshold_death)
+        corr_mutual = (abs_R[I] >= thr_d) & (abs_R[J] >= thr_d)
+        mask = mask & corr_mutual
+    scores = np.minimum(abs_R[I], abs_R[J])
     if E is not None:
         below_both = E[None, :] < (
             np.minimum(E[I, None], E[J, None]) - _COLLIDER_ELEV_MARGIN
@@ -447,9 +446,12 @@ def _elevation_gravity_target(A: np.ndarray, E: np.ndarray) -> np.ndarray:
     root = (in_deg == 0) & (out_deg > 0)
     leaf = (out_deg == 0) & (in_deg > 0)
 
+    inf_mask = np.where(A > 0, E[None, :], np.inf)
+    min_children = np.min(inf_mask, axis=1)
+
     target = E.copy()
     target[both] = 0.5 * (raw_mean_parents[both] + raw_mean_children[both])
-    target[root] = np.minimum(raw_mean_children[root] + delta, 1.0)
+    target[root] = np.minimum(min_children[root] + delta, 1.0)
     target[leaf] = np.maximum(raw_mean_parents[leaf] - delta, 0.0)
     return target
 
@@ -540,8 +542,14 @@ def step(
         Z, counts = _union_neighbor_sets(
             U, I, J, k, Cov, E=E, threshold_death=threshold_death
         )
-        rho = _batched_partial_corr(Cov, I, J, Z, counts)
-        kill = np.abs(rho) < threshold_death
+        min_abs_rho = np.abs(_batched_partial_corr(Cov, I, J, Z, counts))
+        for s in range(1, k):
+            counts_s = np.minimum(counts, s)
+            rho_s = np.abs(
+                _batched_partial_corr(Cov, I, J, Z[:, :s], counts_s)
+            )
+            min_abs_rho = np.minimum(min_abs_rho, rho_s)
+        kill = min_abs_rho < threshold_death
         if np.any(kill):
             A[I[kill], J[kill]] = 0.0
             U = _undirected_neighbors(A)
@@ -551,11 +559,20 @@ def step(
     np.fill_diagonal(undirected_absent, False)
     Bi, Bj = np.nonzero(np.triu(undirected_absent, k=1))
     if Bi.size:
+        R = _correlation_matrix(Cov)
         Z, counts = _union_neighbor_sets(
             U, Bi, Bj, k, Cov, E=E, threshold_death=threshold_death
         )
-        rho = _batched_partial_corr(Cov, Bi, Bj, Z, counts)
-        strong = np.abs(rho) > threshold_birth
+        min_abs_rho = np.abs(_batched_partial_corr(Cov, Bi, Bj, Z, counts))
+        for s in range(1, k):
+            counts_s = np.minimum(counts, s)
+            rho_s = np.abs(
+                _batched_partial_corr(Cov, Bi, Bj, Z[:, :s], counts_s)
+            )
+            min_abs_rho = np.minimum(min_abs_rho, rho_s)
+        strong = (np.abs(R[Bi, Bj]) >= threshold_death) & (
+            min_abs_rho > threshold_birth
+        )
         e_tb = _tiebreak_elevation(E, Cov)
         forward = strong & (e_tb[Bi] > e_tb[Bj])
         backward = strong & (e_tb[Bj] > e_tb[Bi])
