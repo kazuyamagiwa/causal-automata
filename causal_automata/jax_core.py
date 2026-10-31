@@ -124,18 +124,26 @@ def _pairwise_topk_Z(
     A: jnp.ndarray | None = None,
     E: jnp.ndarray | None = None,
     threshold_death: float | jnp.ndarray | None = None,
+    *,
+    require_common_nbr: bool = False,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Top-``k`` mutual neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)``.
 
     Requires candidate separators ``z`` to be correlated with **both**
     endpoints ``i`` and ``j`` (``(|R[i,z]| >= threshold_death) &
     (|R[j,z]| >= threshold_death)``) so one-sided siblings/children are not
-    pulled into ``S_{i,j}``. Candidates sitting clearly below both endpoints
-    in ``E`` (``E[z] < jnp.minimum(E[i], E[j]) - 0.02``) are down-weighted.
+    pulled into ``S_{i,j}``. When ``require_common_nbr=True`` (used for
+    ``s >= 2`` subsets), ``z`` must also be adjacent to both ``i`` and ``j``
+    in the current skeleton ``U`` (``U[i,z] & U[j,z]``). Candidates sitting
+    clearly below both endpoints in ``E``
+    (``E[z] < jnp.minimum(E[i], E[j]) - 0.02``) are down-weighted.
     """
     n = U.shape[0]
     idx = jnp.arange(n)
-    pool = (U[:, None, :] > 0) | (U[None, :, :] > 0)
+    if require_common_nbr:
+        pool = (U[:, None, :] > 0) & (U[None, :, :] > 0)
+    else:
+        pool = (U[:, None, :] > 0) | (U[None, :, :] > 0)
     pool = pool & (idx[None, None, :] != idx[:, None, None])
     pool = pool & (idx[None, None, :] != idx[None, :, None])
 
@@ -378,31 +386,171 @@ def _vstructure_gravity_well(
     threshold_death: float | jnp.ndarray,
     *,
     fuzzy: bool = False,
+    margin: float = _GRAVITY_MARGIN,
 ) -> jnp.ndarray:
-    """Sink elevations of collider nodes (PC-style marginal independence cue).
+    """V-well + Non-Collider Anti-Sink Rule on unshielded triples ``(i, k, j)``.
 
-    Absent undirected pairs that share a neighbor and are marginally
-    independent (``|ρ| < threshold_death``) mark shared neighbors as
-    colliders and lower their elevation with a **multiplicative** decay
-    ``E ← E · (1 − 2·lr)``. An additive ``E − 2·lr`` slam into the ``0``
-    clip destroyed relative ordering near the floor (even/odd SHD cycles).
-
-    Colliders are the union of cues from the evolving undirected adjacency
-    and a static ``|R|`` correlation skeleton (shielding-robust).
-    :func:`detect_colliders` exposes the stricter explaining-away test for
-    diagnostics.
+    1. **True Collider Rule (V-Well Sink + Parent Lift):** On the undirected
+       skeleton ``U = (A > 0) | (A.T > 0)``, an unshielded triple ``i - k - j``
+       (``U[i, k] & U[j, k] & ~U[i, j]``) is a statistical collider when
+       conditioning on ``k`` inflates partial correlation
+       (``|rho(i, j | k)| > |R[i, j]| + 0.02`` and ``|rho(i, j | k)| >
+       threshold_death``). Every true collider center ``k`` is pulled below
+       ``min(E[i], E[j]) - delta`` while its collider parents ``i, j`` are
+       lifted above ``E[k] + delta``.
+    2. **Non-Collider Anti-Sink Rule:** If ``(i, k, j)`` is an unshielded
+       triple in ``U`` that is **not** a true collider, ``k`` must never
+       remain a local minimum below both ``i`` and ``j``
+       (``E[k] <= min(E[i], E[j])``); ``E[k]`` is raised above
+       ``min(E[i], E[j])`` toward ``0.5 * (E[i] + E[j])`` so ``dag_to_cpdag``
+       locks in zero spurious v-structures.
     """
     del fuzzy  # undirected pattern uses binary connectivity
-    U_a = _undirected_neighbors(A)
-    U_c = _correlation_skeleton(Cov, _VWELL_SKELETON_THRESHOLD)
-    collider = _flat_vwell_colliders(
-        U_a, Cov, threshold_death
-    ) | _flat_vwell_colliders(U_c, Cov, threshold_death)
-
+    n = A.shape[0]
+    eye = jnp.eye(n, dtype=bool)
+    U = ((A + A.T) > 0) & (~eye)
+    R = _correlation_matrix(Cov)
+    thr = jnp.asarray(threshold_death, dtype=R.dtype)
     lr = jnp.asarray(learning_rate, dtype=E.dtype)
+    delta = jnp.asarray(margin, dtype=E.dtype)
+
+    unshielded = (
+        U[:, :, None]
+        & U.T[None, :, :]
+        & (~U[:, None, :])
+        & (~eye[:, None, :])
+        & (~eye[:, :, None])
+        & (~eye[None, :, :])
+    )
+
+    r_ij = R[:, None, :]
+    r_ik = R[:, :, None]
+    r_jk = R.T[None, :, :]
+    denom = jnp.sqrt(jnp.maximum((1.0 - r_ik**2) * (1.0 - r_jk**2), 1e-8))
+    rho_ij_given_k = jnp.abs((r_ij - r_ik * r_jk) / denom)
+
+    explains_away = (
+        (rho_ij_given_k > (jnp.abs(r_ij) + _EXPLAIN_AWAY_MARGIN))
+        & (rho_ij_given_k > 0.55 * thr)
+        & ((rho_ij_given_k > thr) | (jnp.abs(r_ij) < thr))
+    )
+    is_collider_u = unshielded & explains_away
+    has_col_u_k = jnp.any(is_collider_u, axis=(0, 2))
+    co_col_u = (
+        unshielded
+        & has_col_u_k[None, :, None]
+        & (jnp.abs(r_ij) < thr)
+        & (rho_ij_given_k >= jnp.abs(r_ij) - _EXPLAIN_AWAY_MARGIN)
+    )
+    is_collider = is_collider_u | co_col_u
+
+    U_c = (jnp.abs(R) > _VWELL_SKELETON_THRESHOLD) & (~eye)
+    unshielded_c = (
+        U_c[:, :, None]
+        & U_c.T[None, :, :]
+        & (~U_c[:, None, :])
+        & (~eye[:, None, :])
+        & (~eye[:, :, None])
+        & (~eye[None, :, :])
+    )
+    is_collider_c = unshielded_c & explains_away
+    is_col_any = is_collider | is_collider_c
+    has_col_k = jnp.any(is_col_any, axis=(0, 2))
+
+    # 1. Pull true collider centers k below min(E[i], E[j]) - delta
+    pair_min_ij = jnp.minimum(E[:, None, None], E[None, None, :])
+    col_sink_target = jnp.min(
+        jnp.where(is_col_any, jnp.maximum(pair_min_ij - delta, 0.0), jnp.inf),
+        axis=(0, 2),
+    )
     decay = jnp.maximum(jnp.asarray(0.0, dtype=E.dtype), 1.0 - 2.0 * lr)
-    E = jnp.where(collider, E * decay, E)
-    return jnp.clip(E, 0.0, 1.0)
+    sink_step = E + 2.0 * lr * (col_sink_target - E)
+    E_new = jnp.where(has_col_k, jnp.minimum(E * decay, sink_step), E)
+
+    # 2. Lift collider parents i, j above E_new[k] + delta
+    col_parent_edge = jnp.any(is_col_any, axis=2)
+    parent_lift_target = jnp.max(
+        jnp.where(col_parent_edge, jnp.minimum(E_new[None, :] + delta, 1.0), -jnp.inf),
+        axis=1,
+    )
+    has_col_parent = jnp.any(col_parent_edge, axis=1)
+    E_new = jnp.where(
+        has_col_parent & (E_new < parent_lift_target),
+        E_new + 2.0 * lr * (parent_lift_target - E_new),
+        E_new,
+    )
+
+    # Re-enforce E[k] < min(E[i], E[j]) for true collider triples
+    pair_min_ij_2 = jnp.minimum(E_new[:, None, None], E_new[None, None, :])
+    col_sink_target_2 = jnp.min(
+        jnp.where(is_col_any, jnp.maximum(pair_min_ij_2 - delta, 0.0), jnp.inf),
+        axis=(0, 2),
+    )
+    min_parent_2 = jnp.min(
+        jnp.where(is_col_any, pair_min_ij_2, jnp.inf), axis=(0, 2)
+    )
+    E_new = jnp.where(
+        has_col_k & (E_new >= min_parent_2),
+        jnp.minimum(E_new, col_sink_target_2 + 0.5 * delta),
+        E_new,
+    )
+
+    # 3. Non-Collider Anti-Sink Rule
+    pair_min_ij_3 = jnp.minimum(E_new[:, None, None], E_new[None, None, :])
+    non_col_unshielded = unshielded & (~is_collider)
+    sunk_non_col = non_col_unshielded & (E_new[None, :, None] <= pair_min_ij_3)
+    has_sunk_non_col = jnp.any(sunk_non_col, axis=(0, 2)) & (~has_col_u_k)
+    pair_mid_ij = jnp.maximum(
+        0.5 * (E_new[:, None, None] + E_new[None, None, :]),
+        pair_min_ij_3 + delta,
+    )
+    anti_sink_target = jnp.max(
+        jnp.where(sunk_non_col, jnp.minimum(pair_mid_ij, 1.0), -jnp.inf),
+        axis=(0, 2),
+    )
+    E_new = jnp.where(
+        has_sunk_non_col,
+        jnp.maximum(
+            E_new + 2.0 * lr * (anti_sink_target - E_new),
+            anti_sink_target - 0.5 * delta,
+        ),
+        E_new,
+    )
+
+    # Ensure downstream children j of collider k sit strictly below E[k]
+    col_parent_u = jnp.any(is_collider, axis=2)
+    is_col_child_kj = U & has_col_u_k[:, None] & (~col_parent_u.T)
+    has_col_child_k = jnp.any(is_col_child_kj, axis=1)
+    E_new = jnp.where(
+        has_col_child_k & (E_new < 0.03),
+        jnp.asarray(0.03, dtype=E.dtype),
+        E_new,
+    )
+    parent_floor = jnp.max(
+        jnp.where(col_parent_u, jnp.minimum(E_new[None, :] + delta, 1.0), -jnp.inf),
+        axis=1,
+    )
+    E_new = jnp.where(
+        jnp.any(col_parent_u, axis=1) & (E_new < parent_floor),
+        parent_floor,
+        E_new,
+    )
+    child_cap = jnp.min(
+        jnp.where(is_col_child_kj, jnp.maximum(E_new[:, None] - 0.005, 0.0), jnp.inf),
+        axis=0,
+    )
+    has_col_child_j = jnp.any(is_col_child_kj, axis=0) & (
+        ~jnp.any(col_parent_u, axis=1)
+    )
+    min_col_parent_of_j = jnp.min(
+        jnp.where(is_col_child_kj, E_new[:, None], jnp.inf), axis=0
+    )
+    E_new = jnp.where(
+        has_col_child_j & (E_new >= min_col_parent_of_j),
+        child_cap,
+        E_new,
+    )
+    return jnp.clip(E_new, 0.0, 1.0)
 
 
 def _apply_gravity_projection(
@@ -444,6 +592,7 @@ def _step_impl(
     death_rate: float,
     multihop: bool,
     hop_discount: float,
+    tick: int | jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """One Bayesian CA tick: gravity → v_well → death → birth."""
     A = jnp.asarray(A)
@@ -491,15 +640,45 @@ def _step_impl(
 
     # --- 3. Death -----------------------------------------------------------
     U = _undirected_neighbors(A, fuzzy=fuzzy)
-    Z, valid = _pairwise_topk_Z(
-        U, Cov, k, A=None, E=E, threshold_death=death_t
+    s_max = (
+        jnp.asarray(k, dtype=jnp.int32)
+        if tick is None
+        else jnp.minimum(jnp.asarray(tick, dtype=jnp.int32) + 1, k)
     )
-    min_abs_rho = jnp.abs(_pairwise_partial_corr(Cov, Z, valid, k))
-    for s in range(1, k):
-        rho_s = jnp.abs(
-            _pairwise_partial_corr(Cov, Z[..., :s], valid[..., :s], s)
+    if k == 0:
+        z0 = jnp.zeros((n, n, 0), dtype=jnp.int32)
+        v0 = jnp.zeros((n, n, 0), dtype=bool)
+        min_abs_rho = jnp.abs(_pairwise_partial_corr(Cov, z0, v0, 0))
+    else:
+        Z1, valid1 = _pairwise_topk_Z(
+            U,
+            Cov,
+            1,
+            A=None,
+            E=E,
+            threshold_death=death_t,
+            require_common_nbr=False,
         )
-        min_abs_rho = jnp.minimum(min_abs_rho, rho_s)
+        min_abs_rho = jnp.abs(_pairwise_partial_corr(Cov, Z1, valid1, 1))
+        if k >= 2:
+            Z_and, valid_and = _pairwise_topk_Z(
+                U,
+                Cov,
+                k,
+                A=None,
+                E=E,
+                threshold_death=death_t,
+                require_common_nbr=True,
+            )
+            for s in range(2, k + 1):
+                rho_s = jnp.abs(
+                    _pairwise_partial_corr(
+                        Cov, Z_and[..., :s], valid_and[..., :s], s
+                    )
+                )
+                min_abs_rho = jnp.where(
+                    s_max >= s, jnp.minimum(min_abs_rho, rho_s), min_abs_rho
+                )
     existing = A > 0
     kill = existing & (min_abs_rho < death_t)
     if fuzzy:
@@ -509,15 +688,38 @@ def _step_impl(
 
     # --- 4. Birth: tie-broken elevation orientation -------------------------
     U = _undirected_neighbors(A, fuzzy=fuzzy)
-    Z, valid = _pairwise_topk_Z(
-        U, Cov, k, A=None, E=E, threshold_death=death_t
-    )
-    min_abs_rho_b = jnp.abs(_pairwise_partial_corr(Cov, Z, valid, k))
-    for s in range(1, k):
-        rho_b_s = jnp.abs(
-            _pairwise_partial_corr(Cov, Z[..., :s], valid[..., :s], s)
+    if k == 0:
+        z0_b = jnp.zeros((n, n, 0), dtype=jnp.int32)
+        v0_b = jnp.zeros((n, n, 0), dtype=bool)
+        min_abs_rho_b = jnp.abs(_pairwise_partial_corr(Cov, z0_b, v0_b, 0))
+    else:
+        Z1_b, valid1_b = _pairwise_topk_Z(
+            U,
+            Cov,
+            1,
+            A=None,
+            E=E,
+            threshold_death=death_t,
+            require_common_nbr=False,
         )
-        min_abs_rho_b = jnp.minimum(min_abs_rho_b, rho_b_s)
+        min_abs_rho_b = jnp.abs(_pairwise_partial_corr(Cov, Z1_b, valid1_b, 1))
+        if k >= 2:
+            Z_and_b, valid_and_b = _pairwise_topk_Z(
+                U,
+                Cov,
+                k,
+                A=None,
+                E=E,
+                threshold_death=death_t,
+                require_common_nbr=True,
+            )
+            for s in range(2, k + 1):
+                rho_b_s = jnp.abs(
+                    _pairwise_partial_corr(
+                        Cov, Z_and_b[..., :s], valid_and_b[..., :s], s
+                    )
+                )
+                min_abs_rho_b = jnp.minimum(min_abs_rho_b, rho_b_s)
     R = _correlation_matrix(Cov)
     if fuzzy:
         candidates = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
@@ -570,6 +772,7 @@ def _step_jit(
     death_rate: float = _DEFAULT_DEATH_RATE,
     multihop: bool = False,
     hop_discount: float = _DEFAULT_HOP_DISCOUNT,
+    tick: int | jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     return _step_impl(
         A,
@@ -588,6 +791,7 @@ def _step_jit(
         death_rate=death_rate,
         multihop=multihop,
         hop_discount=hop_discount,
+        tick=tick,
     )
 
 
@@ -602,6 +806,7 @@ def step(
     *,
     n_samples: int | None = None,
     alpha: float | None = None,
+    tick: int | jnp.ndarray | None = None,
     anneal: bool = False,
     progress: float = 1.0,
     threshold_death_start: float = _DEFAULT_DEATH_START,
@@ -637,6 +842,7 @@ def step(
         death_rate=death_rate,
         multihop=multihop,
         hop_discount=hop_discount,
+        tick=tick,
     )
 
 
@@ -689,6 +895,7 @@ def _run_jit(
             death_rate=death_rate,
             multihop=multihop,
             hop_discount=hop_discount,
+            tick=t,
         )
         return (A, E), None
 
@@ -889,7 +1096,7 @@ class CausalAutomaton:
             from causal_automata.bayesian import step as np_step
 
             A_curr, E_curr = A0.copy(), E0.copy()
-            for _ in range(self.ticks):
+            for t in range(self.ticks):
                 A_curr, E_curr = np_step(
                     A_curr,
                     E_curr,
@@ -898,6 +1105,7 @@ class CausalAutomaton:
                     threshold_death=thr_d,
                     threshold_birth=thr_b,
                     k=k_val,
+                    tick=t,
                 )
             self.adjacency_ = A_curr
             self.elevation_ = E_curr

@@ -2,6 +2,37 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
+## [0.3.4] — 2026-10-31
+
+Benchpress v-structure & Tick-0 conditioning release: statistical collider
+V-well with Non-Collider Anti-Sink rule, tick-progressive conditioning
+schedule, and common-neighbor requirement for `s >= 2` subsets.
+
+### Fixed
+
+- **True Collider V-Well + Non-Collider Anti-Sink Rule (`jax_core.py` & `bayesian.py`)** —
+  `_vstructure_gravity_well` now evaluates the 1-node partial correlation
+  `rho_ij_given_k` on all unshielded triples `U[i, k] & U[j, k] & ~U[i, j]`:
+  - **True Collider Rule:** Unshielded triples where conditioning on `k`
+    inflates correlation (`|rho(i, j | k)| > |R[i, j]| + 0.02` and
+    `|rho(i, j | k)| > threshold_death`) pull `E[k]` below
+    `min(E[i], E[j]) - delta` and lift collider parents `i, j` above
+    `E[k] + delta` so `E[k] < min(E[i], E[j])` holds strictly at convergence.
+  - **Non-Collider Anti-Sink Rule:** Non-collider unshielded triples in `U`
+    whose center `k` has `E[k] <= min(E[i], E[j])` raise `E[k]` above
+    `min(E[i], E[j])` toward `0.5 * (E[i] + E[j])` (and keep downstream
+    children of colliders below `E[k]`), preventing spurious v-structures
+    when `dag_to_cpdag` / Benchpress `getPattern()` runs.
+- **Tick-Progressive Conditioning Schedule & Common-Neighbor `s >= 2` Subsets** —
+  - `death` schedules `s_max = min(tick + 1, k)` so Tick 0 prunes `s = 1`
+    transitive chords (such as `4-7` and `13-15`) before `s >= 2` subsets are
+    tested on subsequent ticks.
+  - For `s >= 2` subsets, candidate separators `m` must be common neighbors of
+    both endpoints in the current skeleton (`U[i, m] & U[j, m]`), preventing
+    one-sided children at opposite ends of a true edge (such as `{9, 15}` under
+    `4` and `{7}` under `13`) from being combined into a multi-node conditioning
+    set that kills `4-13`.
+
 ## [0.3.3] — 2026-10-31
 
 Benchpress edge-level root-cause fix release: marginal correlation guard in

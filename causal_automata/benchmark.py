@@ -368,6 +368,7 @@ def run_jax_ca(
                 threshold_death=death_end,
                 threshold_birth=birth_end,
                 k=k,
+                tick=tick,
                 anneal=True,
                 progress=float(tick) / float(denom),
                 threshold_death_start=death_start,
@@ -388,7 +389,7 @@ def run_jax_ca(
         death_end = threshold_death
         birth_end = threshold_birth
 
-        def _call(_tick: int):
+        def _call(tick: int):
             return jax_step(
                 A,
                 E,
@@ -397,6 +398,7 @@ def run_jax_ca(
                 threshold_death=death_end,
                 threshold_birth=birth_end,
                 k=k,
+                tick=tick,
                 anneal=False,
                 fuzzy=fuzzy,
                 birth_rate=birth_rate,
