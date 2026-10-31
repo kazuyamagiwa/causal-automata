@@ -1,7 +1,7 @@
 Benchmarks
 ==========
 
-**causal-automata** v0.3.2 targets dense synthetic linear DAGs at
+**causal-automata** v0.3.3 targets dense synthetic linear DAGs at
 ``N=50``–``N=100`` with a fully ``@jax.jit``-compiled step. The narrative
 speedups from the project milestone are on the order of **~5,000×** vs
 NOTEARS-class continuous optimization and **~57×** vs PC at **N=50**

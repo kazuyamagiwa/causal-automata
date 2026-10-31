@@ -1,7 +1,7 @@
 causal-automata
 ===============
 
-**causal-automata** (v0.3.2) is a JAX-accelerated cellular automaton
+**causal-automata** (v0.3.3) is a JAX-accelerated cellular automaton
 engine for *causal discovery*: recovering a Directed Acyclic Graph (DAG)
 from observational data by evolving an adjacency matrix under
 physics-inspired local rules.

@@ -125,13 +125,13 @@ def _pairwise_topk_Z(
     E: jnp.ndarray | None = None,
     threshold_death: float | jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Top-``k`` union neighbors ranked by ``|R[i,z]| + |R[j,z]|``.
+    """Top-``k`` mutual neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)``.
 
-    Filters out candidates disconnected from both ``i`` and ``j`` in the
-    correlation skeleton (``|R| < threshold_death``) and down-weights nodes
-    that sit clearly below both ``i`` and ``j`` in ``E``
-    (``E[m] < jnp.minimum(E[i], E[j]) - 0.02``) so ``S_{i,j}`` prioritizes
-    upstream/adjacent candidate parents rather than sunk colliders.
+    Requires candidate separators ``z`` to be correlated with **both**
+    endpoints ``i`` and ``j`` (``(|R[i,z]| >= threshold_death) &
+    (|R[j,z]| >= threshold_death)``) so one-sided siblings/children are not
+    pulled into ``S_{i,j}``. Candidates sitting clearly below both endpoints
+    in ``E`` (``E[z] < jnp.minimum(E[i], E[j]) - 0.02``) are down-weighted.
     """
     n = U.shape[0]
     idx = jnp.arange(n)
@@ -147,10 +147,10 @@ def _pairwise_topk_Z(
     abs_R = jnp.abs(R)
     if threshold_death is not None:
         thr_d = jnp.asarray(threshold_death, dtype=abs_R.dtype)
-        corr_connected = (abs_R[:, None, :] >= thr_d) | (abs_R[None, :, :] >= thr_d)
-        pool = pool & corr_connected
+        corr_mutual = (abs_R[:, None, :] >= thr_d) & (abs_R[None, :, :] >= thr_d)
+        pool = pool & corr_mutual
 
-    scores = abs_R[:, None, :] + abs_R[None, :, :]
+    scores = jnp.minimum(abs_R[:, None, :], abs_R[None, :, :])
     if E is not None:
         margin = jnp.asarray(_COLLIDER_ELEV_MARGIN, dtype=E.dtype)
         weight = jnp.asarray(_COLLIDER_SCORE_WEIGHT, dtype=scores.dtype)
@@ -254,13 +254,15 @@ def _elevation_gravity_target(
     raw_mean_parents = (A.T @ E) / jnp.maximum(in_deg, 1.0)
     raw_mean_children = (A @ E) / jnp.maximum(out_deg, 1.0)
     delta = jnp.asarray(margin, dtype=E.dtype)
+    inf_mask = jnp.where(A > 0, E[None, :], jnp.inf)
+    min_children = jnp.min(inf_mask, axis=1)
 
     local_mean = jnp.where(
         (in_deg > 0) & (out_deg > 0),
         0.5 * (raw_mean_parents + raw_mean_children),
         jnp.where(
             out_deg > 0,
-            jnp.minimum(raw_mean_children + delta, 1.0),
+            jnp.minimum(min_children + delta, 1.0),
             jnp.where(
                 in_deg > 0,
                 jnp.maximum(raw_mean_parents - delta, 0.0),
@@ -492,9 +494,14 @@ def _step_impl(
     Z, valid = _pairwise_topk_Z(
         U, Cov, k, A=None, E=E, threshold_death=death_t
     )
-    rho = _pairwise_partial_corr(Cov, Z, valid, k)
+    min_abs_rho = jnp.abs(_pairwise_partial_corr(Cov, Z, valid, k))
+    for s in range(1, k):
+        rho_s = jnp.abs(
+            _pairwise_partial_corr(Cov, Z[..., :s], valid[..., :s], s)
+        )
+        min_abs_rho = jnp.minimum(min_abs_rho, rho_s)
     existing = A > 0
-    kill = existing & (jnp.abs(rho) < death_t)
+    kill = existing & (min_abs_rho < death_t)
     if fuzzy:
         A = jnp.where(kill, jnp.maximum(0.0, A - death_rate), A)
     else:
@@ -505,14 +512,24 @@ def _step_impl(
     Z, valid = _pairwise_topk_Z(
         U, Cov, k, A=None, E=E, threshold_death=death_t
     )
-    rho = _pairwise_partial_corr(Cov, Z, valid, k)
+    min_abs_rho_b = jnp.abs(_pairwise_partial_corr(Cov, Z, valid, k))
+    for s in range(1, k):
+        rho_b_s = jnp.abs(
+            _pairwise_partial_corr(Cov, Z[..., :s], valid[..., :s], s)
+        )
+        min_abs_rho_b = jnp.minimum(min_abs_rho_b, rho_b_s)
+    R = _correlation_matrix(Cov)
     if fuzzy:
         candidates = jnp.triu(jnp.ones((n, n), dtype=bool), k=1)
     else:
         undirected_absent = (A + A.T) == 0
         undirected_absent = undirected_absent.at[jnp.diag_indices(n)].set(False)
         candidates = jnp.triu(undirected_absent, k=1)
-    strong = candidates & (jnp.abs(rho) > birth_t)
+    strong = (
+        candidates
+        & (jnp.abs(R) >= death_t)
+        & (min_abs_rho_b > birth_t)
+    )
     e_tb = _tiebreak_elevation(E, Cov)
     downhill = e_tb[:, None] > e_tb[None, :]
     forward = strong & downhill
