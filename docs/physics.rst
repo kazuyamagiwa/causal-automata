@@ -100,7 +100,7 @@ benchmark CLIs typically use a **scale-aware** ``k``
 **static** arguments — see :doc:`jax_static`.
 
 Closed-form Sepset algebra (v0.3.5–v0.3.6)
------------------------------------------
+------------------------------------------
 
 The 1-node partial correlation used for ``s=1`` screens and explaining-
 away tests is
