@@ -11,10 +11,10 @@ methods (GOLEM / NOTEARS-class), the engine treats edges as particles on
 a grid. Death, birth, V-wells (explaining-away collider sinks), and
 gravity update every candidate edge in parallel under ``@jax.jit``.
 On the official Benchpress ER ``p=20``, ``n=1000``, 5-seed suite,
-``v0.3.6`` reaches **Skeleton F1 ``0.972 ± 0.036``**, **Pattern F1
-``0.933 ± 0.075``**, and **SHD ``3.4 ± 4.4``** — ahead of
+``v0.3.6`` reaches Skeleton F1 ``0.972 ± 0.036``, Pattern F1
+``0.933 ± 0.075``, and SHD ``3.4 ± 4.4`` — ahead of
 ``notears_linear``, ``pc_gaussian``, and ``golem_ev`` (see
-:doc:`benchmarks`). Optional **``--multihop``** (Maximum Accuracy Mode)
+:doc:`benchmarks`). Optional ``--multihop`` (Maximum Accuracy Mode)
 uses :math:`A@A` for 2-hop vision — **0.696** Directed F1 on the N=100
 harness.
 

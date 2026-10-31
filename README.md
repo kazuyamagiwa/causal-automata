@@ -16,7 +16,7 @@ pip install "causal-automata[jax]"
 
 ## Convergence animation
 
-Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo) under **v0.3.6** dynamics: live overlay shows `Tick t | s_max | Edges | Skeleton F1 | Pattern F1` as transitive chords prune and the graph orients.
+Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo) under **v0.3.6** dynamics. The live overlay tracks tick, `s_max`, edge count, Skeleton F1, and Pattern F1 as transitive chords prune and the graph orients.
 
 <p align="center">
   <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence (v0.3.6)" width="850"/>
@@ -44,7 +44,7 @@ Official [Benchpress](https://github.com/felixleopoldo/benchpress) Singularity/A
 
 | Algorithm | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) |
 | :--- | :---: | :---: | :---: |
-| **Causal Automata (`v0.3.6`)** | **`0.972 ± 0.036`** | **`0.933 ± 0.075`** | **`3.4 ± 4.4`** |
+| **Causal Automata (v0.3.6)** | `0.972 ± 0.036` | `0.933 ± 0.075` | `3.4 ± 4.4` |
 | NOTEARS (Linear) | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` |
 | PC (Gaussian CI) | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` |
 | GOLEM (EV) | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` |
@@ -62,7 +62,7 @@ Evaluated via the official Benchpress Singularity/Apptainer pipeline (`causal_au
 | Algorithm | Benchpress ID | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) | Wall Time (s) |
 | :--- | :--- | :---: | :---: | :---: | :---: |
 | **BiDAG Order MCMC** | `iterative_mcmc` | `0.992 ± 0.011` | `0.992 ± 0.011` | `0.4 ± 0.5` | `0.78 ± 0.05` |
-| **Causal Automata (`v0.3.6`)** | `causal_automata_gpu` | **`0.972 ± 0.036`** | **`0.933 ± 0.075`** | **`3.4 ± 4.4`** | `4.28 ± 0.15` |
+| **Causal Automata (v0.3.6)** | `causal_automata_gpu` | `0.972 ± 0.036` | `0.933 ± 0.075` | `3.4 ± 4.4` | `4.28 ± 0.15` |
 | **NOTEARS (Linear)** | `notears_linear` | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` | `1.89 ± 1.51` |
 | **PC (Gaussian CI)** | `pc_gaussian` | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` | `0.10 ± 0.02` |
 | **GOLEM (EV)** | `golem_ev` | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` | `4.08 ± 0.10` |

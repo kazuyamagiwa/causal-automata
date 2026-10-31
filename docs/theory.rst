@@ -131,4 +131,4 @@ Together with sample-size-adaptive Fisher-z thresholds
 (:func:`~causal_automata.fisher_z_threshold`) and CPDAG conversion
 (:func:`~causal_automata.dag_to_cpdag`), these rules lift Pattern F1 on
 the Benchpress ER ``p=20``, ``n=1000``, 5-seed suite to
-**``0.933 ± 0.075``** (SHD **``3.4 ± 4.4``**) — see :doc:`benchmarks`.
+``0.933 ± 0.075`` (SHD ``3.4 ± 4.4``) — see :doc:`benchmarks`.
