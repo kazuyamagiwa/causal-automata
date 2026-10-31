@@ -290,16 +290,77 @@ def _batched_partial_corr(
     return rho
 
 
+def _partial_corr_conditioned_1(R: np.ndarray) -> np.ndarray:
+    """Closed-form 1-node partial correlations ``P[a, b, m] = rho(a, b | m)``."""
+    r_ab = R[:, :, None]
+    r_am = R[:, None, :]
+    r_bm = R[None, :, :]
+    denom = np.sqrt(
+        np.maximum((1.0 - r_am**2) * (1.0 - r_bm**2), _STD_FLOOR)
+    )
+    return (r_ab - r_am * r_bm) / denom
+
+
+def _sepset_screened_by_second_node(
+    R: np.ndarray,
+    threshold_death: float,
+) -> np.ndarray:
+    """True when some ``m`` screens ``(i, j)`` given ``{k, m}`` (axes ``i,k,j``).
+
+    Uses the closed-form 2-node recursion ``rho(i, j | k, m)`` built from
+    1-node partials conditioned on ``m``. Candidate collider center ``k`` is
+    rejected when ``|rho(i, j | k, m)| < thr_death`` or
+    ``|rho(i, j | k, m)| < |rho(i, j | m)| - 0.02`` for some valid ``m``
+    (PC sepset / 2-node backdoor check; zero matrix inversions).
+    """
+    n = R.shape[0]
+    thr = float(threshold_death)
+    margin = _EXPLAIN_AWAY_MARGIN
+    P = _partial_corr_conditioned_1(R)  # (a, b, m)
+
+    # rho(i, j | m), rho(i, k | m), rho(j, k | m) → (i, k, j, m)
+    pij_m = P[:, None, :, :]
+    pik_m = P[:, :, None, :]
+    pjk_m = np.swapaxes(P, 0, 1)[None, :, :, :]
+    denom = np.sqrt(
+        np.maximum((1.0 - pik_m**2) * (1.0 - pjk_m**2), _STD_FLOOR)
+    )
+    rho_ij_km = np.abs((pij_m - pik_m * pjk_m) / denom)
+
+    idx = np.arange(n)
+    valid_m = (
+        (idx[None, None, None, :] != idx[:, None, None, None])
+        & (idx[None, None, None, :] != idx[None, :, None, None])
+        & (idx[None, None, None, :] != idx[None, None, :, None])
+    )
+    abs_R = np.abs(R)
+    # m correlated with both endpoints i and j (sepset candidate).
+    corr_im = abs_R[:, None, None, :] >= thr  # (i, 1, 1, m)
+    corr_jm = abs_R[None, None, :, :] >= thr  # (1, 1, j, m)
+    valid_m = valid_m & corr_im & corr_jm
+
+    screened_m = valid_m & (
+        (rho_ij_km < thr) | (rho_ij_km < (np.abs(pij_m) - margin))
+    )
+    return np.any(screened_m, axis=-1)
+
+
 def _v_structure_masks(
     A: np.ndarray,
     Cov: np.ndarray,
     threshold_death: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Unshielded explaining-away triples; axes ``(i, k, j)``."""
+    """Unshielded explaining-away triples; axes ``(i, k, j)``.
+
+    A triple is a collider only when conditioning on ``k`` explains away
+    ``(i, j)`` **and** no second node ``m`` screens ``(i, j)`` given
+    ``{k, m}`` (PC sepset / 2-node backdoor check).
+    """
     n = A.shape[0]
     eye = np.eye(n, dtype=bool)
     U = ((A + A.T) > 0) & (~eye)
     R = _correlation_matrix(Cov)
+    thr = float(threshold_death)
 
     wedge = (
         U[:, :, None]
@@ -312,10 +373,14 @@ def _v_structure_masks(
     r_jk = R.T[None, :, :]
     denom = np.sqrt(np.maximum((1.0 - r_ik**2) * (1.0 - r_jk**2), _STD_FLOOR))
     rho_ij_given_k = np.abs((r_ij - r_ik * r_jk) / denom)
-    explains_away = (np.abs(r_ij) < threshold_death) & (
-        rho_ij_given_k > np.abs(r_ij) + _EXPLAIN_AWAY_MARGIN
+    # Explaining-away: inflate on k, with either a clear partial above thr_death
+    # or a marginally independent pair (|R| < thr). Sepset screening below
+    # rejects fork parents that open a backdoor at s=1.
+    explains_away = (rho_ij_given_k > np.abs(r_ij) + _EXPLAIN_AWAY_MARGIN) & (
+        (rho_ij_given_k > thr) | (np.abs(r_ij) < thr)
     )
-    is_v_triple = wedge & explains_away
+    screened = _sepset_screened_by_second_node(R, thr)
+    is_v_triple = wedge & explains_away & (~screened)
     is_collider_k = np.any(is_v_triple, axis=(0, 2))
     is_v_parent_i = np.any(is_v_triple, axis=(1, 2))
     return is_v_triple, is_collider_k, is_v_parent_i
@@ -420,18 +485,18 @@ def _vstructure_gravity_well(
 
     1. **True Collider Rule (V-Well Sink + Parent Lift):** On the undirected
        skeleton ``U = (A > 0) | (A.T > 0)``, an unshielded triple ``i - k - j``
-       (``U[i, k] & U[j, k] & ~U[i, j]``) is a statistical collider when
-       conditioning on ``k`` inflates partial correlation
-       (``|rho(i, j | k)| > |R[i, j]| + 0.02`` and ``|rho(i, j | k)| >
-       threshold_death``). Every true collider center ``k`` is pulled below
-       ``min(E[i], E[j]) - delta`` while its collider parents ``i, j`` are
-       lifted above ``E[k] + delta``.
+       is a statistical collider when conditioning on ``k`` inflates partial
+       correlation (``|rho(i, j | k)| > thr`` and
+       ``|rho(i, j | k)| > |R[i, j]| + 0.02``) **and** no second node ``m``
+       screens ``(i, j)`` given ``{k, m}``. Every true collider center ``k``
+       is pulled strictly below ``min(E[i], E[j]) - delta`` while its
+       collider parents ``i, j`` are lifted above ``E[k] + delta`` (never
+       lifting a node that is itself a true collider sink above its parents).
     2. **Non-Collider Anti-Sink Rule:** If ``(i, k, j)`` is an unshielded
        triple in ``U`` that is **not** a true collider, ``k`` must never
-       remain a local minimum below both ``i`` and ``j``
-       (``E[k] <= min(E[i], E[j])``); ``E[k]`` is raised above
-       ``min(E[i], E[j])`` toward ``0.5 * (E[i] + E[j])`` so ``dag_to_cpdag``
-       locks in zero spurious v-structures.
+       remain a local minimum (``E[k] <= min(E[i], E[j])``); ``E[k]`` is
+       raised strictly above ``min(E[i], E[j]) + delta`` toward
+       ``0.5 * (E[i] + E[j])``.
     """
     n = A.shape[0]
     eye = np.eye(n, dtype=bool)
@@ -461,6 +526,8 @@ def _vstructure_gravity_well(
         & (rho_ij_given_k > 0.55 * thr)
         & ((rho_ij_given_k > thr) | (np.abs(r_ij) < thr))
     )
+    screened = _sepset_screened_by_second_node(R, thr)
+    explains_away = explains_away & (~screened)
     is_collider_u = unshielded & explains_away
     has_col_u_k = np.any(is_collider_u, axis=(0, 2))
     co_col_u = (
@@ -468,6 +535,7 @@ def _vstructure_gravity_well(
         & has_col_u_k[None, :, None]
         & (np.abs(r_ij) < thr)
         & (rho_ij_given_k >= np.abs(r_ij) - _EXPLAIN_AWAY_MARGIN)
+        & (~screened)
     )
     is_collider = is_collider_u | co_col_u
 
@@ -494,16 +562,40 @@ def _vstructure_gravity_well(
     sink_step = E + 2.0 * lr * (col_sink_target - E)
     E_new = np.where(has_col_k, np.minimum(E * decay, sink_step), E)
 
-    # 2. Lift collider parents i, j above E_new[k] + delta
+    # 2. Lift collider parents i, j above E_new[k] + delta.
+    #    Collider-parents are capped so they stay below their own parents
+    #    (lift upstream instead of promoting a sink above its parents).
     col_parent_edge = np.any(is_col_any, axis=2)
     parent_lift_target = np.max(
         np.where(col_parent_edge, np.minimum(E_new[None, :] + delta, 1.0), -np.inf),
         axis=1,
     )
+    # Cap: a node that is itself a collider sink must remain <= its sink target.
+    capped_lift = np.where(
+        has_col_k,
+        np.minimum(parent_lift_target, col_sink_target + 0.5 * delta),
+        parent_lift_target,
+    )
     has_col_parent = np.any(col_parent_edge, axis=1)
     E_new = np.where(
-        has_col_parent & (E_new < parent_lift_target),
-        E_new + 2.0 * lr * (parent_lift_target - E_new),
+        has_col_parent & (E_new < capped_lift),
+        E_new + 2.0 * lr * (capped_lift - E_new),
+        E_new,
+    )
+    # Upstream parents of collider-parents get an extra lift.
+    col_parent_of_sink = col_parent_edge & has_col_k[None, :]
+    upstream_lift = np.max(
+        np.where(
+            col_parent_of_sink,
+            np.minimum(E_new[None, :] + delta, 1.0),
+            -np.inf,
+        ),
+        axis=1,
+    )
+    has_upstream = np.any(col_parent_of_sink, axis=1) & (~has_col_k)
+    E_new = np.where(
+        has_upstream & (E_new < upstream_lift),
+        E_new + 2.0 * lr * (upstream_lift - E_new),
         E_new,
     )
 
@@ -522,7 +614,7 @@ def _vstructure_gravity_well(
         E_new,
     )
 
-    # 3. Non-Collider Anti-Sink Rule
+    # 3. Non-Collider Anti-Sink Rule (hard raise above min + delta)
     pair_min_ij_3 = np.minimum(E_new[:, None, None], E_new[None, None, :])
     non_col_unshielded = unshielded & (~is_collider)
     sunk_non_col = non_col_unshielded & (E_new[None, :, None] <= pair_min_ij_3)
@@ -543,6 +635,11 @@ def _vstructure_gravity_well(
         ),
         E_new,
     )
+    # Hard enforce: non-collider centers must end strictly above min(E[i], E[j]).
+    still_sunk = has_sunk_non_col & np.any(
+        sunk_non_col & (E_new[None, :, None] <= pair_min_ij_3), axis=(0, 2)
+    )
+    E_new = np.where(still_sunk, np.maximum(E_new, anti_sink_target), E_new)
 
     # Ensure downstream children j of collider k sit strictly below E[k]
     col_parent_u = np.any(is_collider, axis=2)
@@ -554,7 +651,7 @@ def _vstructure_gravity_well(
         axis=1,
     )
     E_new = np.where(
-        np.any(col_parent_u, axis=1) & (E_new < parent_floor),
+        np.any(col_parent_u, axis=1) & (~has_col_k) & (E_new < parent_floor),
         parent_floor,
         E_new,
     )
@@ -784,8 +881,10 @@ def step(
         if np.any(backward):
             A[Bj[backward], Bi[backward]] = 1.0
 
-    # Final downhill with bound-aware, Cov-equivariant tie-break.
-    A = (A > 0).astype(np.float64)
-    A *= _downhill_mask(E, Cov)
+    # Final downhill: project the surviving undirected skeleton onto the
+    # downhill mask so mid-tick elevation flips reverse direction instead of
+    # wiping the edge (U_surviving * downhill, not A * downhill).
+    U_surviving = np.maximum(A, A.T)
+    A = (U_surviving > 0).astype(np.float64) * _downhill_mask(E, Cov)
     np.fill_diagonal(A, 0.0)
     return A, E

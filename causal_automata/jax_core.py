@@ -291,6 +291,56 @@ def _elevation_gravity_target(
     return local_mean + discount * (two_hop_mean - E)
 
 
+def _partial_corr_conditioned_1(R: jnp.ndarray) -> jnp.ndarray:
+    """Closed-form 1-node partial correlations ``P[a, b, m] = rho(a, b | m)``."""
+    r_ab = R[:, :, None]
+    r_am = R[:, None, :]
+    r_bm = R[None, :, :]
+    denom = jnp.sqrt(
+        jnp.maximum((1.0 - r_am**2) * (1.0 - r_bm**2), _STD_FLOOR)
+    )
+    return (r_ab - r_am * r_bm) / denom
+
+
+def _sepset_screened_by_second_node(
+    R: jnp.ndarray,
+    threshold_death: float | jnp.ndarray,
+) -> jnp.ndarray:
+    """True when some ``m`` screens ``(i, j)`` given ``{k, m}`` (axes ``i,k,j``).
+
+    Closed-form 2-node recursion ``rho(i, j | k, m)``; rejects candidate
+    collider ``k`` when a valid ``m`` screens off ``(i, j)``.
+    """
+    n = R.shape[0]
+    thr = jnp.asarray(threshold_death, dtype=R.dtype)
+    margin = jnp.asarray(_EXPLAIN_AWAY_MARGIN, dtype=R.dtype)
+    P = _partial_corr_conditioned_1(R)
+
+    pij_m = P[:, None, :, :]
+    pik_m = P[:, :, None, :]
+    pjk_m = jnp.swapaxes(P, 0, 1)[None, :, :, :]
+    denom = jnp.sqrt(
+        jnp.maximum((1.0 - pik_m**2) * (1.0 - pjk_m**2), _STD_FLOOR)
+    )
+    rho_ij_km = jnp.abs((pij_m - pik_m * pjk_m) / denom)
+
+    idx = jnp.arange(n)
+    valid_m = (
+        (idx[None, None, None, :] != idx[:, None, None, None])
+        & (idx[None, None, None, :] != idx[None, :, None, None])
+        & (idx[None, None, None, :] != idx[None, None, :, None])
+    )
+    abs_R = jnp.abs(R)
+    corr_im = abs_R[:, None, None, :] >= thr
+    corr_jm = abs_R[None, None, :, :] >= thr
+    valid_m = valid_m & corr_im & corr_jm
+
+    screened_m = valid_m & (
+        (rho_ij_km < thr) | (rho_ij_km < (jnp.abs(pij_m) - margin))
+    )
+    return jnp.any(screened_m, axis=-1)
+
+
 def _v_structure_masks(
     A: jnp.ndarray,
     Cov: jnp.ndarray,
@@ -298,7 +348,11 @@ def _v_structure_masks(
     *,
     fuzzy: bool = False,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Unshielded explaining-away triples; axes ``(i, k, j)``."""
+    """Unshielded explaining-away triples; axes ``(i, k, j)``.
+
+    Collider only when ``k`` explains away ``(i, j)`` and no second node
+    ``m`` screens ``(i, j)`` given ``{k, m}``.
+    """
     n = A.shape[0]
     eye = jnp.eye(n, dtype=bool)
     if fuzzy:
@@ -322,10 +376,14 @@ def _v_structure_masks(
     denom = jnp.sqrt(jnp.maximum((1.0 - r_ik**2) * (1.0 - r_jk**2), _STD_FLOOR))
     rho_ij_given_k = jnp.abs((r_ij - r_ik * r_jk) / denom)
 
-    explains_away = (jnp.abs(r_ij) < thr) & (
-        rho_ij_given_k > jnp.abs(r_ij) + _EXPLAIN_AWAY_MARGIN
+    # Explaining-away: inflate on k, with either a clear partial above thr_death
+    # or a marginally independent pair (|R| < thr). Sepset screening below
+    # rejects fork parents that open a backdoor at s=1.
+    explains_away = (rho_ij_given_k > jnp.abs(r_ij) + _EXPLAIN_AWAY_MARGIN) & (
+        (rho_ij_given_k > thr) | (jnp.abs(r_ij) < thr)
     )
-    is_v_triple = wedge & explains_away
+    screened = _sepset_screened_by_second_node(R, thr)
+    is_v_triple = wedge & explains_away & (~screened)
     is_collider_k = jnp.any(is_v_triple, axis=(0, 2))
     is_v_parent_i = jnp.any(is_v_triple, axis=(1, 2))
     return is_v_triple, is_collider_k, is_v_parent_i
@@ -392,18 +450,17 @@ def _vstructure_gravity_well(
 
     1. **True Collider Rule (V-Well Sink + Parent Lift):** On the undirected
        skeleton ``U = (A > 0) | (A.T > 0)``, an unshielded triple ``i - k - j``
-       (``U[i, k] & U[j, k] & ~U[i, j]``) is a statistical collider when
-       conditioning on ``k`` inflates partial correlation
-       (``|rho(i, j | k)| > |R[i, j]| + 0.02`` and ``|rho(i, j | k)| >
-       threshold_death``). Every true collider center ``k`` is pulled below
+       is a statistical collider when conditioning on ``k`` inflates partial
+       correlation **and** no second node ``m`` screens ``(i, j)`` given
+       ``{k, m}``. Every true collider center ``k`` is pulled strictly below
        ``min(E[i], E[j]) - delta`` while its collider parents ``i, j`` are
-       lifted above ``E[k] + delta``.
+       lifted above ``E[k] + delta`` (never lifting a node that is itself a
+       true collider sink above its parents).
     2. **Non-Collider Anti-Sink Rule:** If ``(i, k, j)`` is an unshielded
        triple in ``U`` that is **not** a true collider, ``k`` must never
-       remain a local minimum below both ``i`` and ``j``
-       (``E[k] <= min(E[i], E[j])``); ``E[k]`` is raised above
-       ``min(E[i], E[j])`` toward ``0.5 * (E[i] + E[j])`` so ``dag_to_cpdag``
-       locks in zero spurious v-structures.
+       remain a local minimum (``E[k] <= min(E[i], E[j])``); ``E[k]`` is
+       raised strictly above ``min(E[i], E[j]) + delta`` toward
+       ``0.5 * (E[i] + E[j])``.
     """
     del fuzzy  # undirected pattern uses binary connectivity
     n = A.shape[0]
@@ -434,6 +491,8 @@ def _vstructure_gravity_well(
         & (rho_ij_given_k > 0.55 * thr)
         & ((rho_ij_given_k > thr) | (jnp.abs(r_ij) < thr))
     )
+    screened = _sepset_screened_by_second_node(R, thr)
+    explains_away = explains_away & (~screened)
     is_collider_u = unshielded & explains_away
     has_col_u_k = jnp.any(is_collider_u, axis=(0, 2))
     co_col_u = (
@@ -441,6 +500,7 @@ def _vstructure_gravity_well(
         & has_col_u_k[None, :, None]
         & (jnp.abs(r_ij) < thr)
         & (rho_ij_given_k >= jnp.abs(r_ij) - _EXPLAIN_AWAY_MARGIN)
+        & (~screened)
     )
     is_collider = is_collider_u | co_col_u
 
@@ -467,16 +527,38 @@ def _vstructure_gravity_well(
     sink_step = E + 2.0 * lr * (col_sink_target - E)
     E_new = jnp.where(has_col_k, jnp.minimum(E * decay, sink_step), E)
 
-    # 2. Lift collider parents i, j above E_new[k] + delta
+    # 2. Lift collider parents i, j above E_new[k] + delta.
+    #    Collider-parents are capped so they stay below their own parents
+    #    (lift upstream instead of promoting a sink above its parents).
     col_parent_edge = jnp.any(is_col_any, axis=2)
     parent_lift_target = jnp.max(
         jnp.where(col_parent_edge, jnp.minimum(E_new[None, :] + delta, 1.0), -jnp.inf),
         axis=1,
     )
+    capped_lift = jnp.where(
+        has_col_k,
+        jnp.minimum(parent_lift_target, col_sink_target + 0.5 * delta),
+        parent_lift_target,
+    )
     has_col_parent = jnp.any(col_parent_edge, axis=1)
     E_new = jnp.where(
-        has_col_parent & (E_new < parent_lift_target),
-        E_new + 2.0 * lr * (parent_lift_target - E_new),
+        has_col_parent & (E_new < capped_lift),
+        E_new + 2.0 * lr * (capped_lift - E_new),
+        E_new,
+    )
+    col_parent_of_sink = col_parent_edge & has_col_k[None, :]
+    upstream_lift = jnp.max(
+        jnp.where(
+            col_parent_of_sink,
+            jnp.minimum(E_new[None, :] + delta, 1.0),
+            -jnp.inf,
+        ),
+        axis=1,
+    )
+    has_upstream = jnp.any(col_parent_of_sink, axis=1) & (~has_col_k)
+    E_new = jnp.where(
+        has_upstream & (E_new < upstream_lift),
+        E_new + 2.0 * lr * (upstream_lift - E_new),
         E_new,
     )
 
@@ -495,7 +577,7 @@ def _vstructure_gravity_well(
         E_new,
     )
 
-    # 3. Non-Collider Anti-Sink Rule
+    # 3. Non-Collider Anti-Sink Rule (hard raise above min + delta)
     pair_min_ij_3 = jnp.minimum(E_new[:, None, None], E_new[None, None, :])
     non_col_unshielded = unshielded & (~is_collider)
     sunk_non_col = non_col_unshielded & (E_new[None, :, None] <= pair_min_ij_3)
@@ -516,6 +598,10 @@ def _vstructure_gravity_well(
         ),
         E_new,
     )
+    still_sunk = has_sunk_non_col & jnp.any(
+        sunk_non_col & (E_new[None, :, None] <= pair_min_ij_3), axis=(0, 2)
+    )
+    E_new = jnp.where(still_sunk, jnp.maximum(E_new, anti_sink_target), E_new)
 
     # Ensure downstream children j of collider k sit strictly below E[k]
     col_parent_u = jnp.any(is_collider, axis=2)
@@ -531,7 +617,7 @@ def _vstructure_gravity_well(
         axis=1,
     )
     E_new = jnp.where(
-        jnp.any(col_parent_u, axis=1) & (E_new < parent_floor),
+        jnp.any(col_parent_u, axis=1) & (~has_col_k) & (E_new < parent_floor),
         parent_floor,
         E_new,
     )
@@ -561,16 +647,20 @@ def _apply_gravity_projection(
     death_rate: jnp.ndarray,
     Cov: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
-    """Downhill-only projection with bound-aware elevation tie-break."""
+    """Downhill projection of the surviving undirected skeleton.
+
+    Uses ``U_surviving = maximum(A, A.T)`` so mid-tick elevation flips reverse
+    edge direction instead of wiping the edge to zero.
+    """
     n = A.shape[0]
     gravity_ok = _downhill_mask(E, Cov)
     gravity_ok = gravity_ok.at[jnp.diag_indices(n)].set(False)
+    U_surviving = jnp.maximum(A, A.T)
     if fuzzy:
-        A = jnp.where(gravity_ok, A, jnp.maximum(0.0, A - death_rate))
+        A = jnp.where(gravity_ok, U_surviving, jnp.maximum(0.0, A - death_rate))
         A = jnp.clip(A, 0.0, 1.0)
     else:
-        A = (A > 0).astype(A.dtype)
-        A = A * gravity_ok
+        A = (U_surviving > 0).astype(A.dtype) * gravity_ok
     return A.at[jnp.diag_indices(n)].set(0.0)
 
 
