@@ -42,7 +42,7 @@ python scripts/generate_hero_gif.py
 > python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
 > ```
 
-**v0.3.4** — Statistical collider V-well + Non-Collider Anti-Sink rule, tick-progressive conditioning schedule (`s_max = min(tick + 1, k)`), AND-neighbor requirement for `s >= 2`, marginal `birth` guard, and Fisher-z calibration. See [CHANGELOG.md](CHANGELOG.md). Maximum Accuracy Mode (`--multihop`) still reaches Directed F1 **0.696** on N=100.
+**v0.3.5** — Undirected final gravity projection (`U_surviving * downhill`) and 2-node PC sepset screening so mid-tick elevation flips reverse edges instead of wiping them and backdoor forks are not misclassified as colliders. Builds on v0.3.4 V-well / anti-sink / progressive `s_max` / Fisher-z. See [CHANGELOG.md](CHANGELOG.md). Maximum Accuracy Mode (`--multihop`) still reaches Directed F1 **0.696** on N=100.
 
 Default stack (Upgrade 2): **`k=3` if N≤50**, **`k=5` if N>50**, binary edges, 1-hop gravity. On N=100 (`seed=0`, static thresholds, `ticks=100`) that baseline hits Skeleton **0.937** / Directed **0.619** in about **2.8s**.
 
@@ -184,7 +184,7 @@ If you use `causal-automata` in research, please cite:
   author       = {Yamagiwa, Masakazu},
   title        = {causal-automata: GPU-Native Causal Discovery via Synchronous Cellular Automata in JAX},
   year         = {2026},
-  version      = {0.3.4},
+  version      = {0.3.5},
   url          = {https://github.com/kazuyamagiwa/causal-automata},
   license      = {Apache-2.0}
 }

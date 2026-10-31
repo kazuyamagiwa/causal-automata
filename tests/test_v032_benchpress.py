@@ -37,7 +37,7 @@ from causal_automata.jax_core import (  # noqa: E402
 
 
 def test_version_is_0_3_2() -> None:
-    assert __version__ == "0.3.4"
+    assert __version__ == "0.3.5"
 
 
 def test_fisher_z_threshold_formula_and_calibration() -> None:
@@ -395,6 +395,151 @@ def test_v034_4_to_13_survival_and_7_vstructures_motif() -> None:
     assert len(v_true) == 7
     assert v_pred == v_true
     for i, k_col, j in v_true:
+        assert ca_jax.elevation_[k_col] < min(
+            ca_jax.elevation_[i], ca_jax.elevation_[j]
+        )
+
+
+def test_v035_u_projection_preserves_mid_tick_flip() -> None:
+    """v0.3.5 Bug1: final gravity projects U_surviving so a flipped edge reverses, not wipes."""
+    from causal_automata.bayesian import _downhill_mask
+    from causal_automata.jax_core import _apply_gravity_projection
+
+    # Directed A has only 1 -> 0, but E makes 0 -> 1 downhill. Old A*mask wiped both
+    # directions; U_surviving * mask must yield 0 -> 1.
+    A = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=np.float64
+    )
+    E = np.array([0.90, 0.10, 0.50], dtype=np.float64)
+    Cov = np.eye(3, dtype=np.float64)
+
+    wiped = (A > 0).astype(np.float64) * _downhill_mask(E, Cov)
+    U_surviving = np.maximum(A, A.T)
+    kept = (U_surviving > 0).astype(np.float64) * _downhill_mask(E, Cov)
+    assert wiped.sum() == 0.0
+    assert kept[0, 1] == 1.0 and kept[1, 0] == 0.0
+
+    A_jx = np.asarray(
+        _apply_gravity_projection(
+            jnp.asarray(A),
+            jnp.asarray(E),
+            fuzzy=False,
+            death_rate=jnp.asarray(0.1),
+            Cov=jnp.asarray(Cov),
+        )
+    )
+    assert A_jx[0, 1] == 1.0 and A_jx[1, 0] == 0.0
+
+
+def test_v035_sepset_rejects_backdoor_fork_collider() -> None:
+    """v0.3.5 Bug2: 2-node sepset rejects fork parent 19 in (7,19,15); keeps true colliders."""
+    from causal_automata.bayesian import _v_structure_masks as np_masks
+    from causal_automata.jax_core import _v_structure_masks as jx_masks
+
+    rng = np.random.default_rng(0)
+    p, n_samples = 20, 4000
+    W = np.zeros((p, p), dtype=np.float64)
+    for u, v, w in [
+        (4, 13, 0.50),
+        (13, 7, 0.60),
+        (19, 7, 0.60),
+        (4, 15, 0.60),
+        (19, 15, 0.60),
+        (17, 13, 0.50),
+        (4, 9, 0.60),
+    ]:
+        W[u, v] = w
+    A = (W > 0).astype(np.float64)
+    topo = [19, 17, 4, 0, 1, 2, 3, 5, 6, 8, 10, 11, 12, 14, 16, 18, 13, 9, 15, 7]
+    X = np.zeros((n_samples, p), dtype=np.float64)
+    for j in topo:
+        X[:, j] = X @ W[:, j] + rng.normal(size=n_samples)
+    Cov = np.cov(X, rowvar=False)
+    thr = 0.05
+
+    is_v_np, _, _ = np_masks(A, Cov, thr)
+    is_v_jx = np.asarray(jx_masks(jnp.asarray(A), jnp.asarray(Cov), thr)[0])
+    assert np.array_equal(is_v_np, is_v_jx)
+
+    assert bool(is_v_np[13, 7, 19] or is_v_np[19, 7, 13])
+    assert bool(is_v_np[4, 15, 19] or is_v_np[19, 15, 4])
+    assert bool(is_v_np[4, 13, 17] or is_v_np[17, 13, 4])
+    assert not bool(is_v_np[7, 19, 15] or is_v_np[15, 19, 7])
+    assert not bool(is_v_np[9, 4, 15] or is_v_np[15, 4, 9])
+    assert not bool(is_v_np[7, 13, 17] or is_v_np[17, 13, 7])
+
+
+def test_v035_benchpress_diamond_seed1_skeleton_and_vstructures() -> None:
+    """v0.3.5: Benchpress-style diamond 4->13->7<-19 / 4->15<-19 recovers 17/17 TP and true v-structures."""
+    p, n_samples = 20, 1000
+    A_true = np.zeros((p, p), dtype=np.float64)
+    W = np.zeros((p, p), dtype=np.float64)
+    edges_weights = [
+        (4, 13, 0.45),
+        (13, 7, 0.70),
+        (19, 7, 0.70),
+        (4, 15, 0.70),
+        (19, 15, 0.70),
+        (17, 13, 0.55),
+        (4, 9, 0.70),
+        (0, 9, 0.55),
+        (1, 10, 0.55),
+        (3, 10, 0.55),
+        (2, 12, 0.55),
+        (5, 12, 0.55),
+        (6, 14, 0.55),
+        (8, 14, 0.55),
+        (11, 16, 0.55),
+        (18, 16, 0.55),
+        (3, 11, 0.45),
+    ]
+    for u, v, w in edges_weights:
+        A_true[u, v] = 1.0
+        W[u, v] = w
+
+    remaining = set(range(p))
+    topo: list[int] = []
+    while remaining:
+        roots = sorted(
+            i for i in remaining if not any(A_true[j, i] > 0 for j in remaining)
+        )
+        if not roots:
+            roots = [min(remaining)]
+        r = roots[0]
+        topo.append(r)
+        remaining.remove(r)
+
+    rng = np.random.default_rng(5)
+    X = np.zeros((n_samples, p), dtype=np.float64)
+    for j in topo:
+        X[:, j] = X @ W[:, j] + rng.normal(0.0, 1.0, size=n_samples)
+
+    ca_jax = CausalAutomaton(ticks=100, k=3, backend="jax", seed=1).fit(X)
+    ca_np = CausalAutomaton(ticks=100, k=3, backend="numpy", seed=1).fit(X)
+    assert ca_jax.adjacency_ is not None and ca_np.adjacency_ is not None
+    assert ca_jax.cpdag_ is not None and ca_jax.elevation_ is not None
+    assert np.array_equal(ca_jax.adjacency_ > 0, ca_np.adjacency_ > 0)
+    np.testing.assert_allclose(ca_jax.elevation_, ca_np.elevation_, rtol=1e-6, atol=1e-6)
+
+    sk = skeleton_metrics(ca_jax.adjacency_, A_true)
+    cp = edge_metrics(ca_jax.cpdag_, dag_to_cpdag(A_true))
+    v_true = _count_vstructures(A_true)
+    v_pred = _count_vstructures(ca_jax.adjacency_)
+
+    assert sk.tp == 17 and sk.fp == 0 and sk.fn == 0
+    assert sk.f1 == pytest.approx(1.0)
+    assert cp.f1 == pytest.approx(1.0)
+    assert (ca_jax.adjacency_[4, 13] > 0) or (ca_jax.adjacency_[13, 4] > 0)
+    assert v_pred == v_true
+
+    # Focus triples from the Benchpress seed=1 diamond diagnostic.
+    assert (13, 7, 19) in v_pred
+    assert (4, 15, 19) in v_pred
+    assert (4, 13, 17) in v_pred
+    assert (7, 19, 15) not in v_pred
+    assert (9, 4, 15) not in v_pred
+    assert (7, 13, 17) not in v_pred
+    for i, k_col, j in ((13, 7, 19), (4, 15, 19), (4, 13, 17)):
         assert ca_jax.elevation_[k_col] < min(
             ca_jax.elevation_[i], ca_jax.elevation_[j]
         )

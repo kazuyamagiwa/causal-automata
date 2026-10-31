@@ -2,6 +2,32 @@
 
 All notable changes to **causal-automata** are documented in this file.
 
+## [0.3.5] — 2026-10-31
+
+Benchpress seed=1 orientation release: undirected final gravity projection and
+2-node PC sepset screening so mid-tick elevation flips reverse edges instead of
+wiping them, and backdoor forks are no longer misclassified as colliders.
+
+### Fixed
+
+- **Final Gravity Projects the Surviving Undirected Skeleton (`U * downhill`)** —
+  Post-death/birth projection now uses `U_surviving = maximum(A, A.T)` then
+  `U_surviving * downhill_mask` (NumPy `bayesian.step` and JAX
+  `_apply_gravity_projection`). An edge whose elevation order flips mid-tick
+  (initial gravity `13 -> 4`, V-well makes `4 -> 13` downhill) cleanly reverses
+  instead of being wiped to `0` in both directions.
+- **2-Node Backdoor Sepset Check in Collider Masks** —
+  `_v_structure_masks` / `_vstructure_gravity_well` reject an unshielded
+  explaining-away triple `(i, k, j)` when some third node `m` screens
+  `(i, j)` given `{k, m}` via the closed-form 2-node partial
+  `rho(i, j | k, m)` (zero matrix inversions). Fork parents such as `19` in
+  `(7, 19, 15)` that open a backdoor at `s=1` but separate at `{19, 4}` are
+  no longer treated as colliders.
+- **Collider-Parent Cap + Hard Non-Collider Anti-Sink** —
+  Parent lift of a node that is itself a collider sink is capped below its own
+  sink target while upstream parents are lifted; non-collider unshielded centers
+  that remain local minima are hard-raised above `min(E[i], E[j]) + delta`.
+
 ## [0.3.4] — 2026-10-31
 
 Benchpress v-structure & Tick-0 conditioning release: statistical collider
