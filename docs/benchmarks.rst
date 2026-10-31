@@ -1,12 +1,47 @@
 Benchmarks
 ==========
 
-**causal-automata** v0.3.6 targets dense synthetic linear DAGs at
-``N=50``–``N=100`` with a fully ``@jax.jit``-compiled step. The narrative
-speedups from the project milestone are on the order of **~5,000×** vs
-NOTEARS-class continuous optimization and **~57×** vs PC at **N=50**
-scale. Exact wall times depend on hardware (CPU vs Tesla T4) and flags
-(``k``, ``--multihop``).
+**causal-automata** v0.3.6 is evaluated on two tracks: the official
+`Benchpress <https://github.com/felixleopoldo/benchpress>`_ Singularity /
+Apptainer suite (Erdős–Rényi Gaussian DAGs) and the in-repo N=100
+linear-Gaussian harness vs gCastle PC / GOLEM.
+
+Benchpress — ER ``p=20``, ``n=1000``, 5 seeds
+--------------------------------------------
+
+Official Benchpress pipeline (``causal_automata_gpu`` = this package
+``v0.3.6``), seeds ``1..5``:
+
+=============================== ===================== ===================== ===================== ===================== ====================
+Algorithm                       Benchpress ID         Skeleton F1 (↑)       Pattern / CPDAG F1 (↑) Pattern SHD (↓)      Wall Time (s)
+=============================== ===================== ===================== ===================== ===================== ====================
+**BiDAG Order MCMC**            ``iterative_mcmc``    ``0.992 ± 0.011``     ``0.992 ± 0.011``     ``0.4 ± 0.5``        ``0.78 ± 0.05``
+**Causal Automata (v0.3.6)**    ``causal_automata_gpu`` **``0.972 ± 0.036``** **``0.933 ± 0.075``** **``3.4 ± 4.4``**   ``4.28 ± 0.15``
+**NOTEARS (Linear)**            ``notears_linear``    ``0.925 ± 0.048``     ``0.811 ± 0.130``     ``8.8 ± 7.4``        ``1.89 ± 1.51``
+**PC (Gaussian CI)**            ``pc_gaussian``       ``0.902 ± 0.046``     ``0.743 ± 0.082``     ``10.4 ± 3.9``       ``0.10 ± 0.02``
+**GOLEM (EV)**                  ``golem_ev``          ``0.771 ± 0.091``     ``0.587 ± 0.115``     ``19.4 ± 10.1``      ``4.08 ± 0.10``
+=============================== ===================== ===================== ===================== ===================== ====================
+
+``causal-automata`` (``v0.3.6``) outperforms both classical
+constraint-based (``pc_gaussian``) and continuous-optimization
+(``notears_linear``, ``golem_ev``) baselines on **all 5 seeds** in
+Pattern F1 (``0.933`` vs. ``0.811`` / ``0.743``) and Structural Hamming
+Distance (``3.4`` vs. ``8.8`` / ``10.4``), achieving exact graph recovery
+(``1.000`` Skeleton F1) on multiple seeds.
+
+Mechanisms powering these numbers (``v0.3.2``–``v0.3.6``):
+
+* Sample-size-adaptive Fisher-z thresholds via
+  :class:`~causal_automata.CausalAutomaton` /
+  :func:`~causal_automata.fisher_z_threshold`.
+* Closed-form ``s=1`` singleton screens over **all** skeleton neighbors
+  and ``s≥2`` 2-node recursive Sepset combos.
+* PC-consistent endpoint-local neighbor pools (no cross-endpoint child
+  mixing) with Berkson collider exclusion from separator sets.
+* V-well / non-collider anti-sink elevation dynamics plus undirected
+  final gravity projection (:math:`U=\max(A,A^\top)`).
+
+See :doc:`physics` and :doc:`theory` for the mathematical detail.
 
 N=100 — Maximum Accuracy Mode
 -----------------------------
@@ -90,18 +125,24 @@ Reproduce
 
    python -m causal_automata.benchmark --smoke   # device + GOLEM init only
 
-The harness shares SEM helpers with
+The in-repo harness shares SEM helpers with
 :mod:`causal_automata.bayesian_synth`
 (:func:`~causal_automata.bayesian_synth.prepare_synthetic_bundle`).
 PC uses gCastle ``variant="stable"`` with Fisher-Z tests. GOLEM uses
 :data:`causal_automata.benchmark.GOLEM_DEFAULT_KWARGS` (no early-stop —
 fixed Adam budget). The CA row warms up JIT outside the timed window.
 
+Benchpress rows above are from the external Singularity/Apptainer
+pipeline (not the gCastle harness).
+
 Interpreting metrics
 --------------------
 
 * **Directed F1** — precision/recall on oriented edges vs ground truth.
 * **Skeleton F1** — same on undirected pairs (either orientation counts).
+* **Pattern / CPDAG F1** — F1 on the Meek / Chickering completed partially
+  directed pattern (:func:`~causal_automata.dag_to_cpdag`).
+* **Pattern SHD** — structural Hamming distance on the CPDAG pattern.
 * **Wall time** — algorithm ``learn`` / CA step loop only (data generation
   excluded; CA compile excluded).
 
