@@ -30,9 +30,9 @@ Official Benchpress pipeline (``causal_automata_gpu`` = this package
      - ``0.78 ± 0.05``
    * - **Causal Automata (v0.3.6)**
      - ``causal_automata_gpu``
-     - **``0.972 ± 0.036``**
-     - **``0.933 ± 0.075``**
-     - **``3.4 ± 4.4``**
+     - ``0.972 ± 0.036``
+     - ``0.933 ± 0.075``
+     - ``3.4 ± 4.4``
      - ``4.28 ± 0.15``
    * - **NOTEARS (Linear)**
      - ``notears_linear``
