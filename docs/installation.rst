@@ -8,12 +8,12 @@ Requirements
 * Core stack: NumPy, NetworkX, scikit-learn
 * Optional: JAX (CPU, CUDA, or Metal/MPS), gCastle + PyTorch for benchmarks
 
-From PyPI (v0.3.5)
+From PyPI (v0.3.6)
 ------------------
 
 .. code-block:: bash
 
-   pip install "causal-automata==0.3.5"
+   pip install "causal-automata==0.3.6"
    pip install "causal-automata[jax]"      # portable CPU JAX
    pip install "causal-automata[cuda]"     # NVIDIA CUDA 13 JAX + Colab stack
    pip install "causal-automata[gcastle]"  # PC / GOLEM benchmarks

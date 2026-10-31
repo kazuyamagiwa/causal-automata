@@ -400,6 +400,66 @@ def detect_colliders(
     return is_collider_k
 
 
+def _berkson_mask_for_pairs(
+    R: np.ndarray,
+    I: np.ndarray,
+    J: np.ndarray,
+    *,
+    E: np.ndarray | None = None,
+) -> np.ndarray:
+    """Boolean ``(M, n)`` mask: candidate ``m`` is a Berkson collider for ``(I, J)``.
+
+    True when ``|rho(i, j | m)| > |R[i, j]| + 0.02`` or ``m`` sits clearly below
+    both endpoints in elevation (collider sink).
+    """
+    n = R.shape[0]
+    M = I.shape[0]
+    if M == 0:
+        return np.zeros((0, n), dtype=bool)
+    P = _partial_corr_conditioned_1(R)
+    rho_ij_m = np.abs(P[I, J, :])
+    abs_rij = np.abs(R[I, J])[:, None]
+    berkson = rho_ij_m > (abs_rij + _EXPLAIN_AWAY_MARGIN)
+    if E is not None:
+        below_both = E[None, :] < (
+            np.minimum(E[I, None], E[J, None]) - _COLLIDER_ELEV_MARGIN
+        )
+        berkson = berkson | below_both
+    return berkson
+
+
+def _s1_min_abs_rho_all_neighbors(
+    R: np.ndarray,
+    U: np.ndarray,
+    I: np.ndarray,
+    J: np.ndarray,
+    *,
+    E: np.ndarray | None = None,
+) -> np.ndarray:
+    """Exact ``s=1`` screen: ``min_m |rho(i, j | m)|`` over skeleton neighbors.
+
+    Candidates are ``(U[i, m] | U[j, m])`` with Berkson / sink colliders
+    excluded. Costs zero matrix inversions (closed-form 1-node partials).
+    Falls back to ``|R[i, j]|`` when no valid neighbor exists.
+    """
+    M = I.shape[0]
+    if M == 0:
+        return np.zeros(0, dtype=np.float64)
+    n = R.shape[0]
+    P = np.abs(_partial_corr_conditioned_1(R))
+    rho_ij_m = P[I, J, :]
+    valid = (U[I] > 0) | (U[J] > 0)
+    rows = np.arange(M)
+    valid[rows, I] = False
+    valid[rows, J] = False
+    valid = valid & (~_berkson_mask_for_pairs(R, I, J, E=E))
+    filled = np.where(valid, rho_ij_m, np.inf)
+    min_rho = filled.min(axis=1)
+    any_valid = valid.any(axis=1)
+    abs_rij = np.abs(R[I, J])
+    return np.where(any_valid, min_rho, abs_rij)
+
+
 def _union_neighbor_sets(
     U: np.ndarray,
     I: np.ndarray,
@@ -410,13 +470,25 @@ def _union_neighbor_sets(
     E: np.ndarray | None = None,
     threshold_death: float | None = None,
     require_common_nbr: bool = False,
+    endpoint_local: str | None = None,
+    exclude_berkson: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Top-``k`` mutual neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)`` with collider down-weighting."""
+    """Top-``k`` neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)``.
+
+    When ``endpoint_local='i'`` / ``'j'``, candidates are drawn only from
+    ``U(i) \\ {j}`` / ``U(j) \\ {i}`` (PC-consistent; no cross-endpoint mix).
+    Berkson-inflating colliders are excluded from the pool when
+    ``exclude_berkson`` is True.
+    """
     M = I.shape[0]
     if M == 0:
         return np.full((0, k), -1, dtype=np.intp), np.zeros(0, dtype=np.intp)
 
-    if require_common_nbr:
+    if endpoint_local == "i":
+        mask = U[I] > 0
+    elif endpoint_local == "j":
+        mask = U[J] > 0
+    elif require_common_nbr:
         mask = (U[I] > 0) & (U[J] > 0)
     else:
         mask = (U[I] > 0) | (U[J] > 0)
@@ -424,17 +496,68 @@ def _union_neighbor_sets(
     mask[np.arange(M), J] = False
     R = _correlation_matrix(Cov)
     abs_R = np.abs(R)
-    if threshold_death is not None:
+    if threshold_death is not None and endpoint_local is None:
+        # Mutual-corr filter only for legacy non-endpoint-local pools.
         thr_d = float(threshold_death)
         corr_mutual = (abs_R[I] >= thr_d) & (abs_R[J] >= thr_d)
         mask = mask & corr_mutual
+    if exclude_berkson:
+        mask = mask & (~_berkson_mask_for_pairs(R, I, J, E=E))
     scores = np.minimum(abs_R[I], abs_R[J])
-    if E is not None:
-        below_both = E[None, :] < (
-            np.minimum(E[I, None], E[J, None]) - _COLLIDER_ELEV_MARGIN
-        )
-        scores = np.where(below_both, scores * _COLLIDER_SCORE_WEIGHT, scores)
     return _topk_by_score(mask, scores, k)
+
+
+def _min_abs_rho_endpoint_combos(
+    Cov: np.ndarray,
+    U: np.ndarray,
+    I: np.ndarray,
+    J: np.ndarray,
+    k: int,
+    s_max: int,
+    *,
+    E: np.ndarray | None = None,
+    threshold_death: float | None = None,
+    min_abs_rho: np.ndarray | None = None,
+) -> np.ndarray:
+    """PC-style ``s>=2`` screens: all size-``s`` combos within each endpoint pool."""
+    from itertools import combinations
+
+    M = I.shape[0]
+    if min_abs_rho is None:
+        out = np.full(M, np.inf, dtype=np.float64)
+    else:
+        out = np.asarray(min_abs_rho, dtype=np.float64).copy()
+    if M == 0 or k < 2 or s_max < 2:
+        return out
+
+    for side in ("i", "j"):
+        Z, counts = _union_neighbor_sets(
+            U,
+            I,
+            J,
+            k,
+            Cov,
+            E=E,
+            threshold_death=threshold_death,
+            endpoint_local=side,
+            exclude_berkson=True,
+        )
+        for s in range(2, min(s_max, k) + 1):
+            for combo in combinations(range(k), s):
+                cols = list(combo)
+                Z_s = Z[:, cols]
+                # Require every selected slot to be a real neighbor.
+                ok = np.ones(M, dtype=bool)
+                for c in cols:
+                    ok &= Z[:, c] >= 0
+                if not np.any(ok):
+                    continue
+                counts_s = np.where(ok, s, 0).astype(np.intp)
+                rho_s = np.abs(
+                    _batched_partial_corr(Cov, I, J, Z_s, counts_s)
+                )
+                out = np.where(ok, np.minimum(out, rho_s), out)
+    return out
 
 
 def _correlation_skeleton(Cov: np.ndarray, threshold: float) -> np.ndarray:
@@ -781,6 +904,7 @@ def step(
     # --- 3. Death ------------------------------------------------------------
     U = _undirected_neighbors(A)
     I, J = np.nonzero(A > 0)
+    R = _correlation_matrix(Cov)
     if I.size:
         s_max = k if tick is None else min(int(tick) + 1, k)
         if k == 0 or s_max <= 0:
@@ -788,38 +912,23 @@ def step(
             c0 = np.zeros(I.size, dtype=np.intp)
             min_abs_rho = np.abs(_batched_partial_corr(Cov, I, J, Z0, c0))
         else:
-            Z1, counts1 = _union_neighbor_sets(
-                U,
-                I,
-                J,
-                1,
-                Cov,
-                E=E,
-                threshold_death=threshold_death,
-                require_common_nbr=False,
-            )
-            min_abs_rho = np.abs(
-                _batched_partial_corr(Cov, I, J, Z1, counts1)
+            # Exact s=1 closed-form screen over ALL skeleton neighbors.
+            min_abs_rho = _s1_min_abs_rho_all_neighbors(
+                R, U, I, J, E=E
             )
             if s_max >= 2:
-                Z_and, counts_and = _union_neighbor_sets(
+                # PC-consistent endpoint-local pools + all size-s combos.
+                min_abs_rho = _min_abs_rho_endpoint_combos(
+                    Cov,
                     U,
                     I,
                     J,
                     k,
-                    Cov,
+                    s_max,
                     E=E,
                     threshold_death=threshold_death,
-                    require_common_nbr=True,
+                    min_abs_rho=min_abs_rho,
                 )
-                for s in range(2, s_max + 1):
-                    counts_s = np.minimum(counts_and, s)
-                    rho_s = np.abs(
-                        _batched_partial_corr(
-                            Cov, I, J, Z_and[:, :s], counts_s
-                        )
-                    )
-                    min_abs_rho = np.minimum(min_abs_rho, rho_s)
         kill = min_abs_rho < threshold_death
         if np.any(kill):
             A[I[kill], J[kill]] = 0.0
@@ -838,38 +947,21 @@ def step(
                 _batched_partial_corr(Cov, Bi, Bj, Z0_b, c0_b)
             )
         else:
-            Z1_b, counts1_b = _union_neighbor_sets(
-                U,
-                Bi,
-                Bj,
-                1,
-                Cov,
-                E=E,
-                threshold_death=threshold_death,
-                require_common_nbr=False,
-            )
-            min_abs_rho_b = np.abs(
-                _batched_partial_corr(Cov, Bi, Bj, Z1_b, counts1_b)
+            min_abs_rho_b = _s1_min_abs_rho_all_neighbors(
+                R, U, Bi, Bj, E=E
             )
             if k >= 2:
-                Z_and_b, counts_and_b = _union_neighbor_sets(
+                min_abs_rho_b = _min_abs_rho_endpoint_combos(
+                    Cov,
                     U,
                     Bi,
                     Bj,
                     k,
-                    Cov,
+                    k,
                     E=E,
                     threshold_death=threshold_death,
-                    require_common_nbr=True,
+                    min_abs_rho=min_abs_rho_b,
                 )
-                for s in range(2, k + 1):
-                    counts_bs = np.minimum(counts_and_b, s)
-                    rho_bs = np.abs(
-                        _batched_partial_corr(
-                            Cov, Bi, Bj, Z_and_b[:, :s], counts_bs
-                        )
-                    )
-                    min_abs_rho_b = np.minimum(min_abs_rho_b, rho_bs)
         strong = (np.abs(R[Bi, Bj]) >= threshold_death) & (
             min_abs_rho_b > threshold_birth
         )

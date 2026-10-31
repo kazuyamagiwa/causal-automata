@@ -23,7 +23,7 @@ Related background
 Software
 --------
 
-* This package: ``causal-automata`` v0.3.5 — JAX ``@jit`` engine with
+* This package: ``causal-automata`` v0.3.6 — JAX ``@jit`` engine with
   multiplicative V-wells, local-margin gravity, JIT-safe ``run(ticks, k)``,
   dynamic ``k``, ``corr_flat`` init, and ``--multihop`` Maximum Accuracy Mode
   (:mod:`causal_automata.bayesian`, :mod:`causal_automata.jax_core`).

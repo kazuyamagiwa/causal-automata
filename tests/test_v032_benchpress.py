@@ -37,7 +37,7 @@ from causal_automata.jax_core import (  # noqa: E402
 
 
 def test_version_is_0_3_2() -> None:
-    assert __version__ == "0.3.5"
+    assert __version__ == "0.3.6"
 
 
 def test_fisher_z_threshold_formula_and_calibration() -> None:
@@ -543,5 +543,143 @@ def test_v035_benchpress_diamond_seed1_skeleton_and_vstructures() -> None:
         assert ca_jax.elevation_[k_col] < min(
             ca_jax.elevation_[i], ca_jax.elevation_[j]
         )
+
+
+def test_v036_s1_all_neighbor_screen_kills_length2_chord() -> None:
+    """v0.3.6 Fix1: closed-form s=1 over ALL neighbors kills length-2 chords even if separator is not top-1."""
+    from causal_automata.bayesian import (
+        _correlation_matrix,
+        _s1_min_abs_rho_all_neighbors,
+        _undirected_neighbors,
+    )
+    from causal_automata.jax_core import _s1_min_abs_rho_pairwise
+
+    # Chain 0 -> 1 -> 2 with a false chord 0-2. Separator m=1 screens at s=1.
+    rng = np.random.default_rng(0)
+    n_samples = 3000
+    X0 = rng.normal(size=n_samples)
+    X1 = 0.75 * X0 + rng.normal(scale=0.5, size=n_samples)
+    X2 = 0.75 * X1 + rng.normal(scale=0.5, size=n_samples)
+    # Extra high-|R| distractor neighbor of 0 that does NOT screen 0-2.
+    X3 = 0.85 * X0 + rng.normal(scale=0.4, size=n_samples)
+    X = np.column_stack([X0, X1, X2, X3])
+    Cov = np.cov(X, rowvar=False)
+    R = _correlation_matrix(Cov)
+    # Skeleton includes the false chord and distractor edge.
+    A = np.array(
+        [
+            [0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    U = _undirected_neighbors(A)
+    I = np.array([0], dtype=np.intp)
+    J = np.array([2], dtype=np.intp)
+    thr = 0.08
+    min_rho = _s1_min_abs_rho_all_neighbors(R, U, I, J)
+    assert min_rho[0] < thr
+
+    min_rho_jx = np.asarray(
+        _s1_min_abs_rho_pairwise(jnp.asarray(R), jnp.asarray(U))
+    )
+    assert min_rho_jx[0, 2] == pytest.approx(min_rho[0], abs=1e-9)
+    assert min_rho_jx[0, 2] < thr
+
+
+def test_v036_trek_moral_fp_reduction_and_parity() -> None:
+    """v0.3.6: denser motif with length-2/3 treks + moral v-structure has ~0 FP and NumPy/JAX parity."""
+    p, n_samples = 16, 2000
+    A_true = np.zeros((p, p), dtype=np.float64)
+    W = np.zeros((p, p), dtype=np.float64)
+    edges_weights = [
+        # Length-2 / length-3 chain (false chords 0-2, 1-3, 0-3 must die)
+        (0, 1, 0.70),
+        (1, 2, 0.70),
+        (2, 3, 0.70),
+        # Moral collider 4 -> 6 <- 5 (false married-parent 4-5 must not appear)
+        (4, 6, 0.65),
+        (5, 6, 0.65),
+        # Length-3 trek via one-sided neighbors 7-8-9 and 7-10-9
+        (7, 8, 0.60),
+        (8, 9, 0.60),
+        (7, 10, 0.55),
+        (10, 9, 0.55),
+        # Extra identifiable chain + bridges
+        (11, 12, 0.60),
+        (12, 13, 0.60),
+        (13, 14, 0.60),
+        (0, 4, 0.40),
+        (5, 11, 0.40),
+        (3, 15, 0.50),
+        (9, 15, 0.50),
+    ]
+    for u, v, w in edges_weights:
+        A_true[u, v] = 1.0
+        W[u, v] = w
+
+    remaining = set(range(p))
+    topo: list[int] = []
+    while remaining:
+        roots = sorted(
+            i for i in remaining if not any(A_true[j, i] > 0 for j in remaining)
+        )
+        if not roots:
+            roots = [min(remaining)]
+        r = roots[0]
+        topo.append(r)
+        remaining.remove(r)
+
+    rng = np.random.default_rng(7)
+    X = np.zeros((n_samples, p), dtype=np.float64)
+    for j in topo:
+        X[:, j] = X @ W[:, j] + rng.normal(0.0, 1.0, size=n_samples)
+
+    ca_jax = CausalAutomaton(ticks=100, k=3, backend="jax", seed=0).fit(X)
+    ca_np = CausalAutomaton(ticks=100, k=3, backend="numpy", seed=0).fit(X)
+    assert ca_jax.adjacency_ is not None and ca_np.adjacency_ is not None
+    assert np.array_equal(ca_jax.adjacency_ > 0, ca_np.adjacency_ > 0)
+    np.testing.assert_allclose(ca_jax.elevation_, ca_np.elevation_, rtol=1e-6, atol=1e-6)
+
+    sk = skeleton_metrics(ca_jax.adjacency_, A_true)
+    assert sk.fn == 0
+    assert sk.fp <= 1
+    assert sk.f1 >= 0.95
+    # Structural FP categories from the Benchpress audit must be absent.
+    for i, j in ((0, 2), (1, 3), (0, 3), (4, 5), (7, 9)):
+        assert ca_jax.adjacency_[i, j] == 0.0 and ca_jax.adjacency_[j, i] == 0.0
+
+
+def test_v036_dense_er_p20_multi_seed_fp_bound_and_parity() -> None:
+    """v0.3.6: denser ER (p=20, n=1000, p_edge=0.14, seeds 1..5) keeps FP low with NumPy/JAX parity."""
+    total_fp = 0
+    total_fn = 0
+    for seed in (1, 2, 3, 4, 5):
+        rng = np.random.default_rng(seed)
+        p, n_samples = 20, 1000
+        A_true = np.triu((rng.random((p, p)) < 0.14).astype(np.float64), k=1)
+        W = A_true * rng.uniform(0.10, 0.35, size=(p, p))
+        X = np.zeros((n_samples, p), dtype=np.float64)
+        for j in range(p):
+            X[:, j] = X @ W[:, j] + rng.normal(0.0, 1.0, size=n_samples)
+
+        ca_jax = CausalAutomaton(ticks=100, k=3, backend="jax", seed=seed).fit(X)
+        ca_np = CausalAutomaton(ticks=100, k=3, backend="numpy", seed=seed).fit(X)
+        assert ca_jax.adjacency_ is not None and ca_np.adjacency_ is not None
+        assert np.array_equal(ca_jax.adjacency_ > 0, ca_np.adjacency_ > 0)
+        np.testing.assert_allclose(
+            ca_jax.elevation_, ca_np.elevation_, rtol=1e-6, atol=1e-6
+        )
+        sk = skeleton_metrics(ca_jax.adjacency_, A_true)
+        total_fp += sk.fp
+        total_fn += sk.fn
+        assert sk.fp <= 2
+        assert sk.f1 >= 0.90
+
+    # Across 5 denser seeds, FPs stay sharply reduced (audit was FP-dominated).
+    assert total_fp <= 4
+    assert total_fn <= 12
 
 
