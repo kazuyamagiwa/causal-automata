@@ -42,7 +42,7 @@ python scripts/generate_hero_gif.py
 > python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
 > ```
 
-**v0.3.3** — Marginal correlation guard in `birth`, mutual-separator scoring & progressive subset screening in `death`, Fisher-z adaptive thresholds, and `dag_to_cpdag`. See [CHANGELOG.md](CHANGELOG.md). Maximum Accuracy Mode (`--multihop`) still reaches Directed F1 **0.696** on N=100.
+**v0.3.4** — Statistical collider V-well + Non-Collider Anti-Sink rule, tick-progressive conditioning schedule (`s_max = min(tick + 1, k)`), AND-neighbor requirement for `s >= 2`, marginal `birth` guard, and Fisher-z calibration. See [CHANGELOG.md](CHANGELOG.md). Maximum Accuracy Mode (`--multihop`) still reaches Directed F1 **0.696** on N=100.
 
 Default stack (Upgrade 2): **`k=3` if N≤50**, **`k=5` if N>50**, binary edges, 1-hop gravity. On N=100 (`seed=0`, static thresholds, `ticks=100`) that baseline hits Skeleton **0.937** / Directed **0.619** in about **2.8s**.
 
@@ -184,7 +184,7 @@ If you use `causal-automata` in research, please cite:
   author       = {Yamagiwa, Masakazu},
   title        = {causal-automata: GPU-Native Causal Discovery via Synchronous Cellular Automata in JAX},
   year         = {2026},
-  version      = {0.3.3},
+  version      = {0.3.4},
   url          = {https://github.com/kazuyamagiwa/causal-automata},
   license      = {Apache-2.0}
 }

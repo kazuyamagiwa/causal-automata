@@ -344,13 +344,17 @@ def _union_neighbor_sets(
     *,
     E: np.ndarray | None = None,
     threshold_death: float | None = None,
+    require_common_nbr: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Top-``k`` mutual neighbors ranked by ``min(|R[i,z]|, |R[j,z]|)`` with collider down-weighting."""
     M = I.shape[0]
     if M == 0:
         return np.full((0, k), -1, dtype=np.intp), np.zeros(0, dtype=np.intp)
 
-    mask = (U[I] > 0) | (U[J] > 0)
+    if require_common_nbr:
+        mask = (U[I] > 0) & (U[J] > 0)
+    else:
+        mask = (U[I] > 0) | (U[J] > 0)
     mask[np.arange(M), I] = False
     mask[np.arange(M), J] = False
     R = _correlation_matrix(Cov)
@@ -410,28 +414,166 @@ def _vstructure_gravity_well(
     *,
     learning_rate: float,
     threshold_death: float,
+    margin: float = _GRAVITY_MARGIN,
 ) -> np.ndarray:
-    """V-well: multiplicatively sink shared neighbors of independent pairs.
+    """V-well + Non-Collider Anti-Sink Rule on unshielded triples ``(i, k, j)``.
 
-    Uses ``E ← E · (1 − 2·lr)`` on collider candidates instead of an additive
-    ``E − 2·lr`` slam into the ``0`` clip wall, which destroyed relative
-    ordering near the floor and drove even/odd SHD limit cycles.
-
-    Colliders are the union of cues from the evolving undirected adjacency
-    and a static ``|R|`` correlation skeleton (shielding-robust).
+    1. **True Collider Rule (V-Well Sink + Parent Lift):** On the undirected
+       skeleton ``U = (A > 0) | (A.T > 0)``, an unshielded triple ``i - k - j``
+       (``U[i, k] & U[j, k] & ~U[i, j]``) is a statistical collider when
+       conditioning on ``k`` inflates partial correlation
+       (``|rho(i, j | k)| > |R[i, j]| + 0.02`` and ``|rho(i, j | k)| >
+       threshold_death``). Every true collider center ``k`` is pulled below
+       ``min(E[i], E[j]) - delta`` while its collider parents ``i, j`` are
+       lifted above ``E[k] + delta``.
+    2. **Non-Collider Anti-Sink Rule:** If ``(i, k, j)`` is an unshielded
+       triple in ``U`` that is **not** a true collider, ``k`` must never
+       remain a local minimum below both ``i`` and ``j``
+       (``E[k] <= min(E[i], E[j])``); ``E[k]`` is raised above
+       ``min(E[i], E[j])`` toward ``0.5 * (E[i] + E[j])`` so ``dag_to_cpdag``
+       locks in zero spurious v-structures.
     """
-    U_a = _undirected_neighbors(A)
-    U_c = _correlation_skeleton(Cov, _VWELL_SKELETON_THRESHOLD)
-    collider = _flat_vwell_colliders(
-        U_a, Cov, threshold_death
-    ) | _flat_vwell_colliders(U_c, Cov, threshold_death)
-    if not np.any(collider):
-        return E
+    n = A.shape[0]
+    eye = np.eye(n, dtype=bool)
+    U = ((A + A.T) > 0) & (~eye)
+    R = _correlation_matrix(Cov)
+    thr = float(threshold_death)
+    lr = float(learning_rate)
+    delta = float(margin)
 
-    E = E.copy()
-    decay = max(0.0, 1.0 - 2.0 * float(learning_rate))
-    E[collider] *= decay
-    return np.clip(E, 0.0, 1.0)
+    unshielded = (
+        U[:, :, None]
+        & U.T[None, :, :]
+        & (~U[:, None, :])
+        & (~eye[:, None, :])
+        & (~eye[:, :, None])
+        & (~eye[None, :, :])
+    )
+
+    r_ij = R[:, None, :]
+    r_ik = R[:, :, None]
+    r_jk = R.T[None, :, :]
+    denom = np.sqrt(np.maximum((1.0 - r_ik**2) * (1.0 - r_jk**2), 1e-8))
+    rho_ij_given_k = np.abs((r_ij - r_ik * r_jk) / denom)
+
+    explains_away = (
+        (rho_ij_given_k > (np.abs(r_ij) + _EXPLAIN_AWAY_MARGIN))
+        & (rho_ij_given_k > 0.55 * thr)
+        & ((rho_ij_given_k > thr) | (np.abs(r_ij) < thr))
+    )
+    is_collider_u = unshielded & explains_away
+    has_col_u_k = np.any(is_collider_u, axis=(0, 2))
+    co_col_u = (
+        unshielded
+        & has_col_u_k[None, :, None]
+        & (np.abs(r_ij) < thr)
+        & (rho_ij_given_k >= np.abs(r_ij) - _EXPLAIN_AWAY_MARGIN)
+    )
+    is_collider = is_collider_u | co_col_u
+
+    U_c = (np.abs(R) > _VWELL_SKELETON_THRESHOLD) & (~eye)
+    unshielded_c = (
+        U_c[:, :, None]
+        & U_c.T[None, :, :]
+        & (~U_c[:, None, :])
+        & (~eye[:, None, :])
+        & (~eye[:, :, None])
+        & (~eye[None, :, :])
+    )
+    is_collider_c = unshielded_c & explains_away
+    is_col_any = is_collider | is_collider_c
+    has_col_k = np.any(is_col_any, axis=(0, 2))
+
+    # 1. Pull true collider centers k below min(E[i], E[j]) - delta
+    pair_min_ij = np.minimum(E[:, None, None], E[None, None, :])
+    col_sink_target = np.min(
+        np.where(is_col_any, np.maximum(pair_min_ij - delta, 0.0), np.inf),
+        axis=(0, 2),
+    )
+    decay = max(0.0, 1.0 - 2.0 * lr)
+    sink_step = E + 2.0 * lr * (col_sink_target - E)
+    E_new = np.where(has_col_k, np.minimum(E * decay, sink_step), E)
+
+    # 2. Lift collider parents i, j above E_new[k] + delta
+    col_parent_edge = np.any(is_col_any, axis=2)
+    parent_lift_target = np.max(
+        np.where(col_parent_edge, np.minimum(E_new[None, :] + delta, 1.0), -np.inf),
+        axis=1,
+    )
+    has_col_parent = np.any(col_parent_edge, axis=1)
+    E_new = np.where(
+        has_col_parent & (E_new < parent_lift_target),
+        E_new + 2.0 * lr * (parent_lift_target - E_new),
+        E_new,
+    )
+
+    # Re-enforce E[k] < min(E[i], E[j]) for true collider triples
+    pair_min_ij_2 = np.minimum(E_new[:, None, None], E_new[None, None, :])
+    col_sink_target_2 = np.min(
+        np.where(is_col_any, np.maximum(pair_min_ij_2 - delta, 0.0), np.inf),
+        axis=(0, 2),
+    )
+    min_parent_2 = np.min(
+        np.where(is_col_any, pair_min_ij_2, np.inf), axis=(0, 2)
+    )
+    E_new = np.where(
+        has_col_k & (E_new >= min_parent_2),
+        np.minimum(E_new, col_sink_target_2 + 0.5 * delta),
+        E_new,
+    )
+
+    # 3. Non-Collider Anti-Sink Rule
+    pair_min_ij_3 = np.minimum(E_new[:, None, None], E_new[None, None, :])
+    non_col_unshielded = unshielded & (~is_collider)
+    sunk_non_col = non_col_unshielded & (E_new[None, :, None] <= pair_min_ij_3)
+    has_sunk_non_col = np.any(sunk_non_col, axis=(0, 2)) & (~has_col_u_k)
+    pair_mid_ij = np.maximum(
+        0.5 * (E_new[:, None, None] + E_new[None, None, :]),
+        pair_min_ij_3 + delta,
+    )
+    anti_sink_target = np.max(
+        np.where(sunk_non_col, np.minimum(pair_mid_ij, 1.0), -np.inf),
+        axis=(0, 2),
+    )
+    E_new = np.where(
+        has_sunk_non_col,
+        np.maximum(
+            E_new + 2.0 * lr * (anti_sink_target - E_new),
+            anti_sink_target - 0.5 * delta,
+        ),
+        E_new,
+    )
+
+    # Ensure downstream children j of collider k sit strictly below E[k]
+    col_parent_u = np.any(is_collider, axis=2)
+    is_col_child_kj = U & has_col_u_k[:, None] & (~col_parent_u.T)
+    has_col_child_k = np.any(is_col_child_kj, axis=1)
+    E_new = np.where(has_col_child_k & (E_new < 0.03), 0.03, E_new)
+    parent_floor = np.max(
+        np.where(col_parent_u, np.minimum(E_new[None, :] + delta, 1.0), -np.inf),
+        axis=1,
+    )
+    E_new = np.where(
+        np.any(col_parent_u, axis=1) & (E_new < parent_floor),
+        parent_floor,
+        E_new,
+    )
+    child_cap = np.min(
+        np.where(is_col_child_kj, np.maximum(E_new[:, None] - 0.005, 0.0), np.inf),
+        axis=0,
+    )
+    has_col_child_j = np.any(is_col_child_kj, axis=0) & (
+        ~np.any(col_parent_u, axis=1)
+    )
+    min_col_parent_of_j = np.min(
+        np.where(is_col_child_kj, E_new[:, None], np.inf), axis=0
+    )
+    E_new = np.where(
+        has_col_child_j & (E_new >= min_col_parent_of_j),
+        child_cap,
+        E_new,
+    )
+    return np.clip(E_new, 0.0, 1.0)
 
 
 def _elevation_gravity_target(A: np.ndarray, E: np.ndarray) -> np.ndarray:
@@ -467,6 +609,7 @@ def step(
     k: int = 2,
     n_samples: int | None = None,
     alpha: float | None = None,
+    tick: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """One Bayesian CA tick: gravity, V-well, death, then birth.
 
@@ -493,6 +636,9 @@ def step(
     alpha:
         Optional two-sided significance level for :func:`fisher_z_threshold`
         (default ``0.01`` when ``n_samples`` is provided).
+    tick:
+        Optional 0-indexed tick number for progressive conditioning schedule
+        ``s_max = min(tick + 1, k)`` in ``death``.
 
     Returns
     -------
@@ -539,16 +685,44 @@ def step(
     U = _undirected_neighbors(A)
     I, J = np.nonzero(A > 0)
     if I.size:
-        Z, counts = _union_neighbor_sets(
-            U, I, J, k, Cov, E=E, threshold_death=threshold_death
-        )
-        min_abs_rho = np.abs(_batched_partial_corr(Cov, I, J, Z, counts))
-        for s in range(1, k):
-            counts_s = np.minimum(counts, s)
-            rho_s = np.abs(
-                _batched_partial_corr(Cov, I, J, Z[:, :s], counts_s)
+        s_max = k if tick is None else min(int(tick) + 1, k)
+        if k == 0 or s_max <= 0:
+            Z0 = np.zeros((I.size, 0), dtype=np.intp)
+            c0 = np.zeros(I.size, dtype=np.intp)
+            min_abs_rho = np.abs(_batched_partial_corr(Cov, I, J, Z0, c0))
+        else:
+            Z1, counts1 = _union_neighbor_sets(
+                U,
+                I,
+                J,
+                1,
+                Cov,
+                E=E,
+                threshold_death=threshold_death,
+                require_common_nbr=False,
             )
-            min_abs_rho = np.minimum(min_abs_rho, rho_s)
+            min_abs_rho = np.abs(
+                _batched_partial_corr(Cov, I, J, Z1, counts1)
+            )
+            if s_max >= 2:
+                Z_and, counts_and = _union_neighbor_sets(
+                    U,
+                    I,
+                    J,
+                    k,
+                    Cov,
+                    E=E,
+                    threshold_death=threshold_death,
+                    require_common_nbr=True,
+                )
+                for s in range(2, s_max + 1):
+                    counts_s = np.minimum(counts_and, s)
+                    rho_s = np.abs(
+                        _batched_partial_corr(
+                            Cov, I, J, Z_and[:, :s], counts_s
+                        )
+                    )
+                    min_abs_rho = np.minimum(min_abs_rho, rho_s)
         kill = min_abs_rho < threshold_death
         if np.any(kill):
             A[I[kill], J[kill]] = 0.0
@@ -560,18 +734,47 @@ def step(
     Bi, Bj = np.nonzero(np.triu(undirected_absent, k=1))
     if Bi.size:
         R = _correlation_matrix(Cov)
-        Z, counts = _union_neighbor_sets(
-            U, Bi, Bj, k, Cov, E=E, threshold_death=threshold_death
-        )
-        min_abs_rho = np.abs(_batched_partial_corr(Cov, Bi, Bj, Z, counts))
-        for s in range(1, k):
-            counts_s = np.minimum(counts, s)
-            rho_s = np.abs(
-                _batched_partial_corr(Cov, Bi, Bj, Z[:, :s], counts_s)
+        if k == 0:
+            Z0_b = np.zeros((Bi.size, 0), dtype=np.intp)
+            c0_b = np.zeros(Bi.size, dtype=np.intp)
+            min_abs_rho_b = np.abs(
+                _batched_partial_corr(Cov, Bi, Bj, Z0_b, c0_b)
             )
-            min_abs_rho = np.minimum(min_abs_rho, rho_s)
+        else:
+            Z1_b, counts1_b = _union_neighbor_sets(
+                U,
+                Bi,
+                Bj,
+                1,
+                Cov,
+                E=E,
+                threshold_death=threshold_death,
+                require_common_nbr=False,
+            )
+            min_abs_rho_b = np.abs(
+                _batched_partial_corr(Cov, Bi, Bj, Z1_b, counts1_b)
+            )
+            if k >= 2:
+                Z_and_b, counts_and_b = _union_neighbor_sets(
+                    U,
+                    Bi,
+                    Bj,
+                    k,
+                    Cov,
+                    E=E,
+                    threshold_death=threshold_death,
+                    require_common_nbr=True,
+                )
+                for s in range(2, k + 1):
+                    counts_bs = np.minimum(counts_and_b, s)
+                    rho_bs = np.abs(
+                        _batched_partial_corr(
+                            Cov, Bi, Bj, Z_and_b[:, :s], counts_bs
+                        )
+                    )
+                    min_abs_rho_b = np.minimum(min_abs_rho_b, rho_bs)
         strong = (np.abs(R[Bi, Bj]) >= threshold_death) & (
-            min_abs_rho > threshold_birth
+            min_abs_rho_b > threshold_birth
         )
         e_tb = _tiebreak_elevation(E, Cov)
         forward = strong & (e_tb[Bi] > e_tb[Bj])

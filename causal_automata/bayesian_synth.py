@@ -354,6 +354,7 @@ def _resolve_step(backend: str) -> tuple[Callable, str]:
                 threshold_birth=kwargs.get("threshold_birth", 0.15),
                 k=kwargs.get("k", 2),
                 anneal=anneal,
+                tick=kwargs.get("tick"),
             )
             if anneal:
                 call_kwargs.update(
@@ -600,6 +601,7 @@ def run_phase2(
             threshold_death=death_end,
             threshold_birth=birth_end,
             k=k,
+            tick=tick,
         )
         if backend == "jax":
             kwargs["anneal"] = use_anneal

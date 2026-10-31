@@ -37,7 +37,7 @@ from causal_automata.jax_core import (  # noqa: E402
 
 
 def test_version_is_0_3_2() -> None:
-    assert __version__ == "0.3.3"
+    assert __version__ == "0.3.4"
 
 
 def test_fisher_z_threshold_formula_and_calibration() -> None:
@@ -287,4 +287,116 @@ def test_mutual_separator_and_progressive_death_screening() -> None:
     assert A_np[0, 1] == 1.0 and A_np[1, 2] == 1.0
     assert np.array_equal(A_np > 0, A_jx_np > 0)
     np.testing.assert_allclose(E_np, np.asarray(E_jx), rtol=1e-6, atol=1e-6)
+
+
+def _count_vstructures(A: np.ndarray) -> set[tuple[int, int, int]]:
+    n = A.shape[0]
+    D = (A > 0).astype(bool)
+    np.fill_diagonal(D, False)
+    U = D | D.T
+    v_set: set[tuple[int, int, int]] = set()
+    for k in range(n):
+        parents = np.flatnonzero(D[:, k])
+        for idx_a in range(len(parents)):
+            for idx_b in range(idx_a + 1, len(parents)):
+                i, j = int(parents[idx_a]), int(parents[idx_b])
+                if not U[i, j]:
+                    v_set.add((min(i, j), k, max(i, j)))
+    return v_set
+
+
+def test_v034_er_p20_n1000_seed1_vstructures_and_zero_spurious_sinks() -> None:
+    """v0.3.4: ER p=20, n=1000, seed=1 recovers 100% Skeleton & Pattern F1 with 0 spurious v-structures."""
+    rng = np.random.default_rng(1)
+    p, n_samples = 20, 1000
+    A_true = np.triu((rng.random((p, p)) < 0.08).astype(np.float64), k=1)
+    W = A_true * rng.uniform(0.10, 0.35, size=(p, p))
+    X = np.zeros((n_samples, p), dtype=np.float64)
+    for j in range(p):
+        X[:, j] = X @ W[:, j] + rng.normal(0.0, 1.0, size=n_samples)
+
+    ca_jax = CausalAutomaton(ticks=100, k=3, backend="jax", seed=1).fit(X)
+    ca_np = CausalAutomaton(ticks=100, k=3, backend="numpy", seed=1).fit(X)
+    assert ca_jax.adjacency_ is not None and ca_np.adjacency_ is not None
+    assert ca_jax.cpdag_ is not None and ca_np.cpdag_ is not None
+    assert ca_jax.elevation_ is not None and ca_np.elevation_ is not None
+
+    # Exact NumPy <-> JAX parity
+    assert np.array_equal(ca_jax.adjacency_ > 0, ca_np.adjacency_ > 0)
+    np.testing.assert_allclose(ca_jax.elevation_, ca_np.elevation_, rtol=1e-6, atol=1e-6)
+
+    sk = skeleton_metrics(ca_jax.adjacency_, A_true)
+    cp_true = dag_to_cpdag(A_true)
+    cp = edge_metrics(ca_jax.cpdag_, cp_true)
+    v_true = _count_vstructures(A_true)
+    v_pred = _count_vstructures(ca_jax.adjacency_)
+
+    assert sk.fn == 0 and sk.fp == 0 and sk.f1 == pytest.approx(1.0)
+    assert cp.f1 == pytest.approx(1.0)
+    assert v_pred == v_true
+    assert len(v_pred - v_true) == 0
+
+
+def test_v034_4_to_13_survival_and_7_vstructures_motif() -> None:
+    """v0.3.4: 20-node, 17-edge, 7-v-structure motif with 4->13->7, 4->9, 4->15 keeps 4->13 (17/17 TP, 0 FP, 0 FN) and 7/7 v-structures."""
+    p, n_samples = 20, 1000
+    A_true = np.zeros((p, p), dtype=np.float64)
+    W = np.zeros((p, p), dtype=np.float64)
+    edges_weights = [
+        (4, 13, 0.35),
+        (13, 7, 0.65),
+        (4, 9, 0.65),
+        (4, 15, 0.65),
+        (0, 9, 0.50),
+        (1, 15, 0.50),
+        (2, 7, 0.50),
+        (3, 10, 0.50),
+        (5, 10, 0.50),
+        (6, 12, 0.50),
+        (8, 12, 0.50),
+        (3, 11, 0.45),
+        (6, 14, 0.45),
+        (11, 16, 0.50),
+        (14, 16, 0.50),
+        (17, 19, 0.50),
+        (18, 19, 0.50),
+    ]
+    for u, v, w in edges_weights:
+        A_true[u, v] = 1.0
+        W[u, v] = w
+
+    rng = np.random.default_rng(5)
+    topo = [0, 1, 2, 3, 4, 5, 6, 8, 17, 18, 10, 12, 11, 14, 13, 9, 15, 7, 16, 19]
+    X = np.zeros((n_samples, p), dtype=np.float64)
+    for j in topo:
+        X[:, j] = X @ W[:, j] + rng.normal(0.0, 1.0, size=n_samples)
+
+    ca_jax = CausalAutomaton(ticks=100, k=3, backend="jax", seed=1).fit(X)
+    ca_np = CausalAutomaton(ticks=100, k=3, backend="numpy", seed=1).fit(X)
+    assert ca_jax.adjacency_ is not None and ca_np.adjacency_ is not None
+    assert ca_jax.cpdag_ is not None and ca_jax.elevation_ is not None
+
+    assert np.array_equal(ca_jax.adjacency_ > 0, ca_np.adjacency_ > 0)
+    np.testing.assert_allclose(ca_jax.elevation_, ca_np.elevation_, rtol=1e-6, atol=1e-6)
+
+    sk = skeleton_metrics(ca_jax.adjacency_, A_true)
+    cp_true = dag_to_cpdag(A_true)
+    cp = edge_metrics(ca_jax.cpdag_, cp_true)
+    v_true = _count_vstructures(A_true)
+    v_pred = _count_vstructures(ca_jax.adjacency_)
+
+    # 4-13 survives, 4-7 and 13-15 are pruned -> 17/17 TP, 0 FP, 0 FN (Skeleton F1 = 1.000)
+    assert (ca_jax.adjacency_[4, 13] > 0) or (ca_jax.adjacency_[13, 4] > 0)
+    assert ca_jax.adjacency_[4, 7] == 0.0 and ca_jax.adjacency_[7, 4] == 0.0
+    assert ca_jax.adjacency_[13, 15] == 0.0 and ca_jax.adjacency_[15, 13] == 0.0
+    assert sk.tp == 17 and sk.fp == 0 and sk.fn == 0
+    assert sk.f1 == pytest.approx(1.0)
+    assert cp.f1 == pytest.approx(1.0)
+    assert len(v_true) == 7
+    assert v_pred == v_true
+    for i, k_col, j in v_true:
+        assert ca_jax.elevation_[k_col] < min(
+            ca_jax.elevation_[i], ca_jax.elevation_[j]
+        )
+
 
