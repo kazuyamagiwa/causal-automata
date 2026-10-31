@@ -98,12 +98,37 @@ Parallel physics as an alternative to sequential search
 -------------------------------------------------------
 
 Constraint-based methods (PC) run sequential independence tests.
-Continuous optimizers (GOLEM) score DAGs with gradient descent. Both are
-accurate in theory; their cost grows when many pairs and conditioning
-sets are evaluated one at a time.
+Continuous optimizers (GOLEM / NOTEARS) score DAGs with gradient
+descent. Both are accurate in theory; their cost grows when many pairs
+and conditioning sets are evaluated one at a time.
 
 The Causal Automaton reframes structure learning as a physical
 simulation: map variables to a grid, define local forces (gravity,
 sinks, birth, death), and let the DAG emerge from parallel state
 updates. On GPU, the transition is dense linear algebra — see
 :doc:`physics` and :doc:`benchmarks`.
+
+PC-consistent Sepset screening in the automaton
+-----------------------------------------------
+
+Classical PC builds a separating set :math:`S` for :math:`(i,j)` from
+**one** endpoint's adjacency list at a time
+(:math:`\mathrm{adj}(i)\setminus\{j\}` **or**
+:math:`\mathrm{adj}(j)\setminus\{i\}`). Mixing one-sided children from
+**both** endpoints into a single conditioning set can open Berkson paths
+and delete true edges (historically ``4\to 13``).
+
+v0.3.6 mirrors that discipline inside the cellular update:
+
+* **``s=1``** — closed-form partial correlation against **every** current
+  skeleton neighbor (not only the top-1 score).
+* **``s≥2``** — endpoint-local top-``k`` pools; all size-``s``
+  combinations; Berkson-inflating colliders excluded from :math:`Z`.
+* **V-well** — a triple is a collider only if explaining-away holds
+  **and** no second node screens the pair (2-node Sepset recursion).
+
+Together with sample-size-adaptive Fisher-z thresholds
+(:func:`~causal_automata.fisher_z_threshold`) and CPDAG conversion
+(:func:`~causal_automata.dag_to_cpdag`), these rules lift Pattern F1 on
+the Benchpress ER ``p=20``, ``n=1000``, 5-seed suite to
+**``0.933 ± 0.075``** (SHD **``3.4 ± 4.4``**) — see :doc:`benchmarks`.

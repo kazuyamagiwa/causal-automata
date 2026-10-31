@@ -79,15 +79,16 @@ Each call to ``step`` applies, in order:
 1. **Gravity** — raw downhill projection, then local-margin elevation
    drift (roots sit just above children, leaves just below parents;
    isolates hold ``E``). Optional ``multihop=True`` also pulls toward
-   2-hop means from :math:`A@A`.
-2. **V-well** — lowers elevations of shared neighbors of marginally
-   independent pairs (collider cue). This updates ``E`` only; edges are
-   re-oriented by later birth / downhill projection.
-3. **Death / birth** — prune weak and spawn strong edges using partial
-   correlations conditioned on the top-``k`` union neighbors ranked by
-   absolute **correlation** :math:`|R|` (not raw ``|Cov|``). Birth
-   orients with a deterministic elevation tie-break so nodes clipped at
-   the same bound still get a direction.
+   2-hop means from :math:`A@A`. Final projection uses
+   :math:`U=\max(A,A^\top)` so mid-tick elevation flips reverse edges.
+2. **V-well** — statistical explaining-away colliders sink in ``E``
+   (parent lift + non-collider anti-sink; 2-node Sepset rejects
+   backdoor forks). Edges re-orient via later birth / downhill.
+3. **Death / birth** — exact closed-form ``s=1`` screens over all
+   skeleton neighbors, then PC-consistent endpoint-local ``s≥2``
+   combos (Berkson colliders excluded from ``Z``). Birth also requires
+   :math:`|R|\ge\tau_{\mathrm{death}}` and orients with a deterministic
+   elevation tie-break.
 
 NumPy vs JAX
 ------------
