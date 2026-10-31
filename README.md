@@ -8,14 +8,18 @@
 
 Classical constraint-based causal discovery (PC / Meek orientation rules) relies on sequential branching and dynamic conditioning sets that bottleneck on CPU. `causal-automata` reformulates structure learning as a synchronous, strictly acyclic dynamical system over an adjacency matrix \(A_t\) and a 1D topological potential field \(E_t\) ("Gravity"), compiling into a single XLA `jax.lax.scan` loop on GPU/TPU.
 
+```bash
+pip install "causal-automata[jax]"
+```
+
 ---
 
 ## Convergence animation
 
-Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo): roots hold high, V-well colliders sink.
+Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo) under **v0.3.6** dynamics: live overlay shows `Tick t | s_max | Edges | Skeleton F1 | Pattern F1` as transitive chords prune and the graph orients.
 
 <p align="center">
-  <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence" width="850"/>
+  <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence (v0.3.6)" width="850"/>
 </p>
 
 <p align="center">
@@ -23,8 +27,8 @@ Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a fl
 </p>
 
 - **Downhill Acyclicity by Construction (\(O(N^2)\) projection):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG without \(O(N^3)\) matrix-exponential penalties. (A full tick with dense pair scores and batched \((2+k)\times(2+k)\) inversions still scales closer to \(O(N^3)\).)
-- **V-Wells on elevations:** Shared neighbors of marginally independent pairs are pulled downward in \(E\) with a multiplicative decay (collider cue; avoids clipping into an even/odd SHD limit cycle); later birth / downhill projection prefer \(i \to k \leftarrow j\).
-- **Local-margin Gravity:** Elevation drift toward parent/child means with a small margin for roots/leaves (no hard \(1.0/0.0\) anchors that saturated random inits).
+- **V-Wells + Anti-Sink:** Statistical explaining-away colliders sink in \(E\); non-collider unshielded centers are raised so spurious v-structures cannot form.
+- **Closed-form Sepset screens (v0.3.6):** Exact `s=1` neighbor partials + PC-consistent endpoint-local `s≥2` combos with Berkson collider exclusion cut denser-ER false positives.
 
 Regenerate the animation assets locally (GIF + MP4; needs `ffmpeg` for the MP4):
 
@@ -34,15 +38,46 @@ python scripts/generate_hero_gif.py
 
 ---
 
-## Benchmarks (N=100)
+### Benchmark Highlights (Benchpress Suite)
+
+Official [Benchpress](https://github.com/felixleopoldo/benchpress) Singularity/Apptainer pipeline — Erdős–Rényi Gaussian DAGs, **p=20, n=1000, seeds 1..5**:
+
+| Algorithm | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) |
+| :--- | :---: | :---: | :---: |
+| **Causal Automata (`v0.3.6`)** | **`0.972 ± 0.036`** | **`0.933 ± 0.075`** | **`3.4 ± 4.4`** |
+| NOTEARS (Linear) | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` |
+| PC (Gaussian CI) | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` |
+| GOLEM (EV) | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` |
+
+`causal-automata` beats `notears_linear`, `pc_gaussian`, and `golem_ev` on Pattern F1 and SHD across all 5 seeds, with exact skeleton recovery (`1.000`) on multiple seeds. Full table + methodology → [Benchmarks](#benchmarks-benchpress--n100).
+
+---
+
+## Benchmarks (Benchpress + N=100)
+
+### Benchpress Benchmark Comparison (`ER p=20, n=1000`, 5 Seeds)
+
+Evaluated via the official Benchpress Singularity/Apptainer pipeline (`causal_automata_gpu` = this package `v0.3.6`):
+
+| Algorithm | Benchpress ID | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) | Wall Time (s) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **BiDAG Order MCMC** | `iterative_mcmc` | `0.992 ± 0.011` | `0.992 ± 0.011` | `0.4 ± 0.5` | `0.78 ± 0.05` |
+| **Causal Automata (`v0.3.6`)** | `causal_automata_gpu` | **`0.972 ± 0.036`** | **`0.933 ± 0.075`** | **`3.4 ± 4.4`** | `4.28 ± 0.15` |
+| **NOTEARS (Linear)** | `notears_linear` | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` | `1.89 ± 1.51` |
+| **PC (Gaussian CI)** | `pc_gaussian` | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` | `0.10 ± 0.02` |
+| **GOLEM (EV)** | `golem_ev` | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` | `4.08 ± 0.10` |
+
+`causal-automata` (`v0.3.6`) outperforms both classical constraint-based (`pc_gaussian`) and continuous-optimization (`notears_linear`, `golem_ev`) baselines on all 5 seeds in Pattern F1 (`0.933` vs. `0.811` / `0.743`) and Structural Hamming Distance (`3.4` vs. `8.8` / `10.4`), achieving exact graph recovery (`1.000` Skeleton F1) on multiple seeds.
+
+Powering the engine (`v0.3.2`–`v0.3.6`): sample-size-adaptive Fisher-z thresholds (`CausalAutomaton.fit`), closed-form `s=1` singleton and `s=2` 2-node recursive Sepset screening, PC-consistent endpoint-local neighbor conditioning, Berkson collider exclusion from separator pools, and V-well / non-collider anti-sink elevation dynamics. See [CHANGELOG.md](CHANGELOG.md).
+
+### N=100 linear-Gaussian SEM (gCastle harness)
 
 > **Wall-clock vs accuracy:** On the N=100 linear-Gaussian SEM (`seed=0`, `ticks=100`), Bayesian CA finishes in **~2.9s** on CPU JAX — about **180×** faster than PC (gcastle, 528s) — while Maximum Accuracy Mode (`--multihop`) reaches **Directed F1 0.696** / Skeleton F1 **0.928**. Reproduce with:
 >
 > ```bash
 > python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
 > ```
-
-**v0.3.6** — Exact `s=1` closed-form neighbor screen, PC-consistent endpoint-local `s≥2` all-pairs conditioning, and Berkson collider exclusion from separator pools — cutting denser-ER False Positives while preserving `4→13` / diamond v-structure recovery. See [CHANGELOG.md](CHANGELOG.md). Maximum Accuracy Mode (`--multihop`) still reaches Directed F1 **0.696** on N=100.
 
 Default stack (Upgrade 2): **`k=3` if N≤50**, **`k=5` if N>50**, binary edges, 1-hop gravity. On N=100 (`seed=0`, static thresholds, `ticks=100`) that baseline hits Skeleton **0.937** / Directed **0.619** in about **2.8s**.
 
@@ -96,6 +131,15 @@ pip install "causal-automata[jax]"
 pip install "causal-automata[cuda]"
 ```
 
+High-level estimator (auto Fisher-z thresholds from `n_samples`):
+
+```python
+from causal_automata import CausalAutomaton
+
+ca = CausalAutomaton(ticks=100, k=3, backend="jax").fit(X)  # X: (n, p)
+A, E, C = ca.adjacency_, ca.elevation_, ca.cpdag_
+```
+
 Minimal JAX snippet (`ticks` / `k` are static for XLA):
 
 ```python
@@ -137,10 +181,10 @@ uv add "causal-automata[jax]"
 
 State is a binary DAG adjacency \(A\), node elevations \(E \in [0,1]\), and a fixed empirical covariance \(\mathrm{Cov}\) from continuous observations. Each tick is a local cellular update (**gravity → V-well → death → birth**):
 
-1. **Gravity** — raw downhill projection, then local-margin elevation drift (roots sit just above children, leaves just below parents; isolates hold \(E\)). Optional **`--multihop`** also pulls toward 2-hop means from \(A @ A\).
-2. **V-Well** — multiplicatively lowers elevations of shared neighbors of marginally independent pairs (collider cue on \(E\); edges re-orient via birth / downhill later).
-3. **Death** — prune weak edges using partial correlations conditioned on the top-`k` union neighbors ranked by absolute correlation \(|R|\) (heuristic CI — not an exhaustive \(\min_Z\) search).
-4. **Birth** — add strong edges with the same partial-corr gate; orientation uses a deterministic elevation tie-break so nodes clipped at the same bound still get a direction. Optional **`--fuzzy`** keeps continuous weights in \([0, 1]\) and binarizes only after the final tick.
+1. **Gravity** — raw downhill projection, then local-margin elevation drift (roots sit just above children, leaves just below parents; isolates hold \(E\)). Optional **`--multihop`** also pulls toward 2-hop means from \(A @ A\). Final projection uses the surviving undirected skeleton \(U=\max(A,A^\top)\) so mid-tick elevation flips reverse edges instead of wiping them.
+2. **V-Well** — statistical explaining-away colliders sink in \(E\) (with parent lift + non-collider anti-sink); 2-node Sepset screening rejects backdoor forks misclassified as colliders.
+3. **Death** — prune weak edges with (i) exact closed-form `s=1` screens over **all** skeleton neighbors, then (ii) PC-consistent endpoint-local top-`k` pools with all size-`s` combos (`s_max=\min(t+1,k)`). Berkson-inflating colliders are excluded from separator pools.
+4. **Birth** — add strong edges under the same Sepset gates plus a marginal `|R|≥τ_death` guard; orientation uses a deterministic elevation tie-break. Optional **`--fuzzy`** keeps continuous weights in \([0, 1]\) and binarizes only after the final tick.
 
 NumPy (`bayesian.step`) and JAX (`jax_core.step` / `run`) share this physics. The JAX port is `@jax.jit`-compiled; `run(..., ticks=..., k=...)` marks `ticks` and `k` as **static** so `jax.lax.scan` length and `(2+k)×(2+k)` partial-corr blocks stay compile-time constants. See [JAX static arguments](https://causal-automata.readthedocs.io/en/latest/jax_static.html) for `functools.partial` patterns that avoid `ConcretizationTypeError`.
 
