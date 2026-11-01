@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Generate README convergence-animation assets (GIF + MP4).
+"""Generate README hero animation assets (GIF + MP4).
 
-Records a short JAX CA trajectory on the Phase-2 N=10 motif with the synth
-``corr_flat`` default init (symmetric ``|R|`` skeleton + near-flat
-``E0 ≈ 0.5``) under **v0.3.6** dynamics (progressive ``s_max``, closed-form
-``s=1`` screens, endpoint-local ``s≥2``, V-well / anti-sink) and writes:
+Storyboard — Phase-2 N=10 diamond motif, edgeless start ``A0 = 0`` under
+**v0.3.6** dynamics (progressive ``s_max``, closed-form ``s=1`` screens,
+endpoint-local ``s≥2``, V-well / anti-sink):
+
+* Fixed top-to-bottom topological layout of the ground-truth DAG.
+* Faint grey "ghost" true-DAG arrows under every frame (including Tick 0).
+* Estimated edges colored by correctness:
+  - solid green/cyan  — correct direction over a true edge
+  - solid amber/gold  — reversed true-skeleton edge (still flipping)
+  - dashed coral/red  — transitive / confounded false positive
+* Nodes colored by live elevation ``E[i](t)`` with a Root↔Sink colorbar.
+* Top scoreboard: ``Tick | s_max | Skeleton F1 | Pattern F1 | SHD``.
+
+Writes:
 
 * ``assets/elevation_convergence.gif`` — primary README embed
 * ``assets/elevation_convergence.mp4`` — iPhone / reduced-motion fallback
-
-Each frame overlays ``Tick t | s_max | Edges | Skeleton F1 | Pattern F1``.
-GitHub often freezes animated GIFs when accessibility reduced-motion is on —
-the MP4 is a tap-to-play fallback.
 
 Usage::
 
@@ -31,6 +37,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import animation
+from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrowPatch
 from PIL import Image, ImageSequence
 
@@ -52,49 +59,57 @@ from causal_automata.jax_core import enable_x64, step  # noqa: E402
 # ---------------------------------------------------------------------------
 
 N = 10
-TICKS = 100
-HOLD_FINAL = 14
+# Animate through progressive s=1→s=2→s=3; motif typically converges by tick 5.
+TICKS = 8
+HOLD_FINAL_SEC = 2.5
 SEED = 42
 K = 3
-N_SAMPLES = 1000  # Fisher-z calibration for the hero SEM
-FPS = 10
-DPI = 110
-FIGSIZE = (11, 5)
+N_SAMPLES = 1000
+FPS = 4  # slow enough to read each birth/death phase
+DPI = 120
+FIGSIZE = (10.5, 7.2)
 LEARNING_RATE = 0.10
-# Multihop compresses the elevation field; leave off so the plateau → strata
-# separation stays visible in the README clip.
 MULTIHOP = False
 OUT_GIF = _ROOT / "assets" / "elevation_convergence.gif"
 OUT_MP4 = _ROOT / "assets" / "elevation_convergence.mp4"
-BG = "#0f172a"
+
+BG = "#0b1220"
+PANEL = "#111827"
 FG = "#e2e8f0"
 MUTED = "#94a3b8"
-TP_COLOR = "#10b981"
-FP_COLOR = "#ef4444"
-PLATEAU_COLOR = "#64748b"
+GHOST = "#94a3b8"
+CORRECT = "#22d3ee"  # cyan — covers grey ghost when correct
+REVERSED = "#fbbf24"  # amber — right skeleton, wrong direction
+FALSE_POS = "#f87171"  # coral — transitive / confounded chord
+GHOST_ALPHA = 0.22
+
 MAX_GIF_BYTES = 5 * 1024 * 1024
 MAX_MP4_BYTES = 10 * 1024 * 1024
 
 THRESHOLD_DEATH = fisher_z_threshold(N_SAMPLES, k_cond=K, alpha=0.01)
 THRESHOLD_BIRTH = 1.2 * THRESHOLD_DEATH
+HOLD_FINAL = max(int(round(HOLD_FINAL_SEC * FPS)), 1)
 
 
 def build_hero_problem(
     *,
     seed: int = SEED,
-    skeleton_threshold: float = THRESHOLD_BIRTH,
-    elevation_noise: float = 1e-4,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return ``(A_true, Cov, A0, E0)`` via synth ``corr_flat`` defaults."""
+    """Return ``(A_true, Cov, A0=0, E0≈0.5)`` for the Phase-2 N=10 motif."""
     bundle = prepare_synthetic_bundle(
         n=N,
         seed=seed,
         permute_nodes=True,
         init_mode="corr_flat",
-        skeleton_threshold=skeleton_threshold,
-        elevation_noise=elevation_noise,
+        skeleton_threshold=float(THRESHOLD_BIRTH),
+        elevation_noise=0.0,
     )
-    return bundle.A_true, bundle.Cov, bundle.A_init, bundle.E_init
+    # Edgeless start so Tick 0 shows only the grey ground-truth ghost.
+    A0 = np.zeros((N, N), dtype=np.float64)
+    # Exact plateau — dynamics on this motif need the flat start for the
+    # birth → FP prune → amber flip → perfect storyboard (seed=42, k=3).
+    E0 = np.full(N, 0.5, dtype=np.float64)
+    return bundle.A_true, bundle.Cov, A0, E0
 
 
 def run_trajectory(
@@ -105,11 +120,7 @@ def run_trajectory(
     ticks: int = TICKS,
     k: int = K,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Scan CA ticks and return histories including the t=0 initial state.
-
-    Passes progressive ``tick`` so ``s_max = min(tick + 1, k)`` matches the
-    v0.3.6 death schedule used by :class:`~causal_automata.CausalAutomaton`.
-    """
+    """Scan CA ticks and return histories including the t=0 initial state."""
     A0_j = jnp.asarray(A0, dtype=jnp.float64)
     E0_j = jnp.asarray(E0, dtype=jnp.float64)
     Cov_j = jnp.asarray(Cov, dtype=jnp.float64)
@@ -132,7 +143,6 @@ def run_trajectory(
 
     (_, _), (A_hist, E_hist) = jax.lax.scan(body, (A0_j, E0_j), xs=ticks_j)
 
-    # Prepend tick-0 plateau so the GIF starts flat / undirected.
     A_full = np.concatenate(
         [np.asarray(A0_j)[None, ...], np.asarray(A_hist)], axis=0
     )
@@ -155,9 +165,8 @@ def _structural_hamming(A_pred: np.ndarray, A_true: np.ndarray) -> int:
     return n_extra + n_missing + n_rev
 
 
-def _n_undirected_edges(A: np.ndarray) -> int:
-    U = ((A > 0.5) | (A.T > 0.5)) & ~np.eye(A.shape[0], dtype=bool)
-    return int(np.sum(np.triu(U, k=1)))
+def _n_directed_edges(A: np.ndarray) -> int:
+    return int(np.sum((A > 0.5) & ~np.eye(A.shape[0], dtype=bool)))
 
 
 def compute_metrics(
@@ -178,36 +187,54 @@ def compute_metrics(
         sk_f1[t] = skeleton_metrics(A_t, A_true).f1
         dir_f1[t] = edge_metrics(A_t, A_true).f1
         pat_f1[t] = edge_metrics(dag_to_cpdag(A_t), cpdag_true).f1
-        n_edges[t] = _n_undirected_edges(A_t)
+        n_edges[t] = _n_directed_edges(A_t)
         # Frame 0 is the initial state (no death yet); frames 1.. use tick=0..
         tick = max(t - 1, 0)
         s_max[t] = min(tick + 1, K) if K > 0 else 0
     return shd, sk_f1, dir_f1, pat_f1, n_edges, s_max
 
 
-def _node_x_coords(n: int = N) -> np.ndarray:
-    """Even horizontal spread with a slight deterministic offset (no layout lib)."""
-    x = np.linspace(0.05, 0.95, n)
-    offset = 0.03 * np.sin(np.arange(n) * 1.7)
-    return x + offset
+def topological_layered_layout(A_true: np.ndarray) -> np.ndarray:
+    """Non-overlapping top-to-bottom layout from longest-path layers of A_true.
 
+    Returns ``xy`` with shape ``(N, 2)`` in axes coordinates; y decreases from
+    roots (high) to sinks (low).
+    """
+    n = A_true.shape[0]
+    true = (A_true > 0.5) & ~np.eye(n, dtype=bool)
+    # Longest-path layering (roots = layer 0).
+    layer = np.zeros(n, dtype=np.int32)
+    changed = True
+    while changed:
+        changed = False
+        for j in range(n):
+            parents = np.flatnonzero(true[:, j])
+            if parents.size == 0:
+                continue
+            cand = int(layer[parents].max()) + 1
+            if cand > layer[j]:
+                layer[j] = cand
+                changed = True
 
-def _style_axes(ax: plt.Axes, *, title: str) -> None:
-    ax.set_facecolor(BG)
-    ax.set_title(title, color=FG, fontsize=10, pad=8)
-    ax.tick_params(colors=MUTED, labelsize=8)
-    for spine in ax.spines.values():
-        spine.set_color("#334155")
+    max_layer = int(layer.max()) if n else 0
+    xy = np.zeros((n, 2), dtype=np.float64)
+    for L in range(max_layer + 1):
+        nodes = np.flatnonzero(layer == L)
+        # Stable left-to-right by original index for reproducibility.
+        nodes = np.sort(nodes)
+        m = len(nodes)
+        xs = np.linspace(0.12, 0.88, m) if m > 1 else np.array([0.5])
+        # Mild stagger so stacked layers don't look like a ladder.
+        xs = xs + (0.02 if L % 2 else -0.02) * (m > 1)
+        y = 0.92 - (0.80 * L / max(max_layer, 1))
+        for k, node in enumerate(nodes):
+            xy[node, 0] = float(xs[k])
+            xy[node, 1] = float(y)
+    return xy
 
 
 def _force_full_frame_delta(im: Image.Image, frame_idx: int) -> Image.Image:
-    """Nudge opposite corners so Pillow cannot crop to a partial dirty-rect.
-
-    Even with ``optimize=False``, Pillow's GIF writer still crops each frame to
-    the bbox of pixels that changed vs the previous frame. Differences at both
-    ``(0,0)`` and ``(w-1,h-1)`` force a full-canvas write. Invisible in practice
-    on a 1210×550 dark plot (1-level channel wobble).
-    """
+    """Nudge opposite corners so Pillow cannot crop to a partial dirty-rect."""
     out = im.copy()
     px = out.load()
     assert px is not None
@@ -293,6 +320,58 @@ def _save_mp4(frames: list[Image.Image], dest_path: Path, *, fps: int = FPS) -> 
         shutil.rmtree(frame_dir, ignore_errors=True)
 
 
+def _classify_edge(
+    i: int, j: int, A_true: np.ndarray
+) -> str:
+    """Return ``correct`` | ``reversed`` | ``false_positive`` for estimated i→j."""
+    if A_true[i, j] > 0.5:
+        return "correct"
+    if A_true[j, i] > 0.5:
+        return "reversed"
+    return "false_positive"
+
+
+def _arrow(
+    xy: np.ndarray,
+    i: int,
+    j: int,
+    *,
+    color: str,
+    alpha: float,
+    lw: float,
+    style: str,
+    zorder: int,
+    rad: float = 0.0,
+    mutation_scale: float = 14,
+) -> FancyArrowPatch:
+    """Fancy arrow between fixed layout positions, shortened toward nodes."""
+    p0 = xy[i].copy()
+    p1 = xy[j].copy()
+    vec = p1 - p0
+    dist = float(np.linalg.norm(vec))
+    if dist < 1e-9:
+        return FancyArrowPatch(p0, p1, arrowstyle="-|>", color=color, alpha=0.0)
+    unit = vec / dist
+    # Keep arrowheads clear of node disks.
+    shrink = 0.045
+    p0s = p0 + unit * shrink
+    p1s = p1 - unit * shrink
+    return FancyArrowPatch(
+        p0s,
+        p1s,
+        arrowstyle="-|>",
+        mutation_scale=mutation_scale,
+        lw=lw,
+        color=color,
+        alpha=alpha,
+        linestyle=style,
+        connectionstyle=f"arc3,rad={rad}",
+        zorder=zorder,
+        shrinkA=0,
+        shrinkB=0,
+    )
+
+
 def render_animation(
     A_hist: np.ndarray,
     E_hist: np.ndarray,
@@ -303,12 +382,11 @@ def render_animation(
     hold_final: int = HOLD_FINAL,
     fps: int = FPS,
 ) -> tuple[Path, Path]:
-    """Two-panel dark-theme animation → GIF + MP4."""
+    """Single-panel layered DAG with ghost true edges → GIF + MP4."""
     shd, sk_f1, dir_f1, pat_f1, n_edges, s_max = compute_metrics(A_hist, A_true)
-    n_ticks = A_hist.shape[0]  # ticks+1 (includes t=0)
-
-    x_coords = _node_x_coords(N)
-    cmap = mpl.colormaps["plasma"]
+    n_ticks = A_hist.shape[0]
+    xy = topological_layered_layout(A_true)
+    elev_cmap = mpl.colormaps["coolwarm"]
 
     mpl.rcParams.update(
         {
@@ -320,126 +398,70 @@ def render_animation(
     )
 
     fig = plt.figure(figsize=FIGSIZE, dpi=DPI, facecolor=BG)
-    gs = fig.add_gridspec(
-        2,
-        2,
-        width_ratios=[1.15, 1.0],
-        height_ratios=[1.0, 1.0],
-        wspace=0.30,
-        hspace=0.38,
-        left=0.06,
-        right=0.97,
-        top=0.88,
-        bottom=0.11,
-    )
-    ax_dag = fig.add_subplot(gs[:, 0])
-    ax_elev = fig.add_subplot(gs[0, 1])
-    ax_met = fig.add_subplot(gs[1, 1])
-    ax_f1 = ax_met.twinx()
+    ax = fig.add_axes([0.06, 0.14, 0.72, 0.76])
+    ax.set_facecolor(PANEL)
+    for spine in ax.spines.values():
+        spine.set_color("#1f2937")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.02, 1.02)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect("equal")
 
     fig.suptitle(
-        "causal-automata v0.3.6  ·  corr_flat init  ·  E≈0.5 plateau → strata",
+        "From Empty Grid to True Causal DAG   ·   causal-automata v0.3.6",
         color=FG,
-        fontsize=11,
-        y=0.97,
+        fontsize=13,
+        fontweight="bold",
+        y=0.965,
     )
-
-    _style_axes(ax_dag, title="Causal Automaton: Live DAG & Gravity Field E_t")
-    _style_axes(ax_elev, title="Elevation Trajectories E_t (flat → separated)")
-    _style_axes(ax_met, title="Structural Convergence")
-    ax_f1.set_facecolor(BG)
-    ax_f1.tick_params(colors=MUTED, labelsize=7)
-    for spine in ax_f1.spines.values():
-        spine.set_color("#334155")
-
-    ax_dag.set_xlim(-0.05, 1.05)
-    ax_dag.set_ylim(-0.08, 1.12)
-    ax_dag.set_xlabel("Node index (permuted)", fontsize=8, color=MUTED)
-    ax_dag.set_ylabel("Topological Elevation E_t", fontsize=8, color=MUTED)
-    ax_dag.set_xticks(x_coords)
-    ax_dag.set_xticklabels([str(i) for i in range(N)], fontsize=7)
-    ax_dag.axhline(
-        0.5,
-        color=PLATEAU_COLOR,
-        lw=0.9,
-        ls="--",
-        alpha=0.55,
-        zorder=1,
-    )
-
-    elev_lines = []
-    for i in range(N):
-        (ln,) = ax_elev.plot([], [], lw=1.15, color=cmap(E_hist[0, i]), alpha=0.85)
-        elev_lines.append(ln)
-    ax_elev.axhline(
-        0.5,
-        color=PLATEAU_COLOR,
-        lw=0.9,
-        ls="--",
-        alpha=0.55,
-        zorder=1,
-    )
-    ax_elev.set_xlim(0, n_ticks - 1)
-    ax_elev.set_ylim(-0.05, 1.05)
-    ax_elev.set_ylabel("E_t[i]", fontsize=8, color=MUTED)
-    ax_elev.set_xlabel("tick", fontsize=8, color=MUTED)
-
-    (shd_line,) = ax_met.plot([], [], color="#38bdf8", lw=1.6, label="SHD")
-    (sk_line,) = ax_f1.plot([], [], color="#a78bfa", lw=1.4, label="Skeleton F1")
-    (pat_line,) = ax_f1.plot([], [], color=TP_COLOR, lw=1.4, label="Pattern F1")
-    ax_met.set_xlim(0, n_ticks - 1)
-    ax_met.set_ylim(0, max(float(shd.max()) * 1.15, 1.0))
-    ax_met.set_xlabel("tick", fontsize=8, color=MUTED)
-    ax_met.set_ylabel("SHD", fontsize=8, color=MUTED)
-    ax_f1.set_ylim(0, 1.05)
-    ax_f1.set_ylabel("F1", fontsize=8, color=MUTED)
-    ax_met.legend(
-        [shd_line, sk_line, pat_line],
-        ["SHD", "Skeleton F1", "Pattern F1"],
-        loc="upper right",
-        fontsize=7,
-        frameon=False,
-        labelcolor=MUTED,
-    )
-
-    tick_text = ax_dag.text(
-        0.02,
-        0.98,
-        "",
-        transform=ax_dag.transAxes,
-        ha="left",
+    subtitle = fig.text(
+        0.42,
+        0.915,
+        "Phase-2 N=10 motif  ·  A₀ = 0  ·  grey ghost = ground-truth target",
+        ha="center",
         va="top",
-        fontsize=8,
         color=MUTED,
+        fontsize=9,
+    )
+
+    scoreboard = fig.text(
+        0.42,
+        0.875,
+        "",
+        ha="center",
+        va="top",
+        color=FG,
+        fontsize=10,
         family="DejaVu Sans Mono",
+        fontweight="bold",
     )
 
-    scat = ax_dag.scatter(
-        x_coords,
-        E_hist[0],
-        c=E_hist[0],
-        cmap="plasma",
-        vmin=0.0,
-        vmax=1.0,
-        s=90,
-        zorder=5,
-        edgecolors=BG,
-        linewidths=0.6,
-    )
-    labels_txt = [
-        ax_dag.text(
-            x_coords[i],
-            E_hist[0, i] + 0.045,
-            str(i),
-            ha="center",
-            va="bottom",
-            fontsize=7,
-            color=FG,
-            zorder=6,
-        )
+    # --- Ghost true-DAG arrows (static, all frames) -------------------------
+    true_ij = [
+        (i, j)
         for i in range(N)
+        for j in range(N)
+        if A_true[i, j] > 0.5
     ]
+    ghost_artists = []
+    for i, j in true_ij:
+        art = _arrow(
+            xy,
+            i,
+            j,
+            color=GHOST,
+            alpha=GHOST_ALPHA,
+            lw=2.4,
+            style="-",
+            zorder=2,
+            rad=0.05,
+            mutation_scale=16,
+        )
+        ax.add_patch(art)
+        ghost_artists.append(art)
 
+    # --- Live estimated edges + nodes --------------------------------------
     edge_artists: list = []
 
     def _clear_edges() -> None:
@@ -448,62 +470,197 @@ def render_animation(
             art.remove()
         edge_artists = []
 
-    def _draw_edges(A_t: np.ndarray, E_t: np.ndarray) -> None:
+    def _draw_estimated(A_t: np.ndarray) -> None:
         _clear_edges()
         for i in range(N):
             for j in range(N):
                 if A_t[i, j] <= 0.5:
                     continue
-                is_tp = A_true[i, j] > 0.5
-                color = TP_COLOR if is_tp else FP_COLOR
-                style = "-" if is_tp else "--"
-                alpha = 0.90 if is_tp else 0.40
-                arrow = FancyArrowPatch(
-                    (x_coords[i], E_t[i]),
-                    (x_coords[j], E_t[j]),
-                    arrowstyle="-|>",
-                    mutation_scale=10,
-                    lw=1.15,
+                kind = _classify_edge(i, j, A_true)
+                if kind == "correct":
+                    color, style, alpha, lw, z, rad = (
+                        CORRECT,
+                        "-",
+                        0.95,
+                        2.2,
+                        4,
+                        0.08,
+                    )
+                elif kind == "reversed":
+                    color, style, alpha, lw, z, rad = (
+                        REVERSED,
+                        "-",
+                        0.95,
+                        2.0,
+                        4,
+                        -0.12,
+                    )
+                else:
+                    color, style, alpha, lw, z, rad = (
+                        FALSE_POS,
+                        "--",
+                        0.85,
+                        1.6,
+                        3,
+                        0.18,
+                    )
+                art = _arrow(
+                    xy,
+                    i,
+                    j,
                     color=color,
                     alpha=alpha,
-                    linestyle=style,
-                    connectionstyle="arc3,rad=0.08",
-                    zorder=3,
+                    lw=lw,
+                    style=style,
+                    zorder=z,
+                    rad=rad,
+                    mutation_scale=13,
                 )
-                ax_dag.add_patch(arrow)
-                edge_artists.append(arrow)
+                ax.add_patch(art)
+                edge_artists.append(art)
+
+    # Stretch color limits to the live elevation range so Root↔Sink
+    # stratification is readable (absolute E often stays in a narrow band).
+    e_lo = float(E_hist.min())
+    e_hi = float(E_hist.max())
+    if e_hi - e_lo < 1e-3:
+        e_lo, e_hi = 0.0, 1.0
+    else:
+        pad = 0.05 * (e_hi - e_lo)
+        e_lo, e_hi = e_lo - pad, e_hi + pad
+
+    scat = ax.scatter(
+        xy[:, 0],
+        xy[:, 1],
+        c=E_hist[0],
+        cmap=elev_cmap,
+        vmin=e_lo,
+        vmax=e_hi,
+        s=320,
+        zorder=6,
+        edgecolors="#0f172a",
+        linewidths=1.4,
+    )
+    labels_txt = [
+        ax.text(
+            xy[i, 0],
+            xy[i, 1],
+            str(i),
+            ha="center",
+            va="center",
+            fontsize=9,
+            color="#0f172a",
+            fontweight="bold",
+            zorder=7,
+        )
+        for i in range(N)
+    ]
+
+    # Colorbar for elevation.
+    cax = fig.add_axes([0.82, 0.28, 0.02, 0.48])
+    cbar = fig.colorbar(scat, cax=cax)
+    cbar.set_label("Node Elevation E(t)", color=FG, fontsize=9)
+    cbar.ax.yaxis.set_tick_params(color=MUTED, labelcolor=MUTED, labelsize=8)
+    cbar.outline.set_edgecolor("#334155")
+    cax.text(
+        0.5,
+        1.06,
+        "Root\n(High)",
+        transform=cax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=7,
+        color=MUTED,
+    )
+    cax.text(
+        0.5,
+        -0.06,
+        "Sink\n(Low)",
+        transform=cax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=7,
+        color=MUTED,
+    )
+
+    # Compact legend.
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=GHOST,
+            lw=2.4,
+            alpha=0.55,
+            label="Grey = True DAG Target",
+        ),
+        Line2D([0], [0], color=CORRECT, lw=2.2, label="Cyan = Correct Edge"),
+        Line2D(
+            [0], [0], color=REVERSED, lw=2.0, label="Amber = Reversed (Flipping)"
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=FALSE_POS,
+            lw=1.6,
+            ls="--",
+            label="Dashed Red = Transitive FP (Pruning)",
+        ),
+    ]
+    leg = ax.legend(
+        handles=legend_handles,
+        loc="lower left",
+        fontsize=7.5,
+        frameon=True,
+        fancybox=False,
+        edgecolor="#334155",
+        facecolor="#0f172a",
+        labelcolor=FG,
+        borderpad=0.6,
+        handlelength=2.4,
+    )
+    leg.get_frame().set_alpha(0.92)
+
+    phase_text = ax.text(
+        0.02,
+        0.98,
+        "",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        color=FG,
+        fontweight="bold",
+        zorder=8,
+    )
+
+    def _phase_label(frame_t: int) -> str:
+        if frame_t == 0:
+            return "Tick 0 · Edgeless start (A₀ = 0)"
+        if frame_t == 1:
+            return "Tick 1 · Parallel birth (candidates spark)"
+        if sk_f1[frame_t] >= 0.999 and pat_f1[frame_t] >= 0.999:
+            return "Converged · Grey ghost fully covered"
+        return f"Tick {frame_t} · Progressive death / V-well (s_max={int(s_max[frame_t])})"
 
     def init():
-        _draw_edges(A_hist[0], E_hist[0])
-        return (scat, tick_text, shd_line, sk_line, pat_line, *elev_lines, *labels_txt)
+        _draw_estimated(A_hist[0])
+        return (scat, scoreboard, phase_text, subtitle, *labels_txt)
 
     def update(frame_t: int):
         E_t = E_hist[frame_t]
         A_t = A_hist[frame_t]
-        scat.set_offsets(np.column_stack([x_coords, E_t]))
         scat.set_array(E_t)
-        for i, txt in enumerate(labels_txt):
-            txt.set_position((x_coords[i], E_t[i] + 0.045))
-        _draw_edges(A_t, E_t)
-
-        xs = np.arange(frame_t + 1)
-        for i, ln in enumerate(elev_lines):
-            ln.set_data(xs, E_hist[: frame_t + 1, i])
-            ln.set_color(cmap(float(E_t[i])))
-
-        shd_line.set_data(xs, shd[: frame_t + 1])
-        sk_line.set_data(xs, sk_f1[: frame_t + 1])
-        pat_line.set_data(xs, pat_f1[: frame_t + 1])
-
-        tick_text.set_text(
+        _draw_estimated(A_t)
+        scoreboard.set_text(
             f"Tick {frame_t}  |  s_max={int(s_max[frame_t])}  |  "
             f"Edges={int(n_edges[frame_t])}  |  "
             f"Skeleton F1={sk_f1[frame_t]:.3f}  |  "
-            f"Pattern F1={pat_f1[frame_t]:.3f}"
+            f"Pattern F1={pat_f1[frame_t]:.3f}  |  "
+            f"SHD={int(shd[frame_t])}"
         )
-        return (scat, tick_text, shd_line, sk_line, pat_line, *elev_lines, *labels_txt)
+        phase_text.set_text(_phase_label(frame_t))
+        return (scat, scoreboard, phase_text, *labels_txt)
 
-    # Render ticks only here; exporters append the end hold.
     anim = animation.FuncAnimation(
         fig,
         update,
@@ -532,18 +689,15 @@ def render_animation(
 def main() -> int:
     enable_x64()
     print(
-        f"Building Phase-2 N={N} motif (seed={SEED}, corr_flat, "
-        f"permute_nodes=True)…"
+        f"Building Phase-2 N={N} motif (seed={SEED}, A0=0, "
+        f"flat E0=0.5, permute_nodes=True)…"
     )
-    A_true, Cov, A0, E0 = build_hero_problem(
-        skeleton_threshold=float(THRESHOLD_BIRTH)
-    )
+    A_true, Cov, A0, E0 = build_hero_problem(seed=SEED)
     n_true = int(A_true.sum())
     print(f"  true edges: {n_true}")
     print(
-        f"  init undirected pairs: {int(A0.sum()) // 2}  |  "
-        f"A0 symmetric={bool(np.allclose(A0, A0.T))}  |  "
-        f"E0≈0.5 max|E-0.5|={float(np.max(np.abs(E0 - 0.5))):.2e}"
+        f"  init directed edges: {_n_directed_edges(A0)}  |  "
+        f"E0 flat max|E-0.5|={float(np.max(np.abs(E0 - 0.5))):.2e}"
     )
     print(
         f"  ticks={TICKS}  k={K}  lr={LEARNING_RATE}  "
@@ -558,12 +712,23 @@ def main() -> int:
         f"{float(E_hist[-1].std()):.3f}  "
         f"(min={float(E_hist[-1].min()):.3f}, max={float(E_hist[-1].max()):.3f})"
     )
-    shd, sk_f1, dir_f1, pat_f1, n_edges, _ = compute_metrics(A_hist, A_true)
+    shd, sk_f1, dir_f1, pat_f1, n_edges, s_max_arr = compute_metrics(A_hist, A_true)
+    for t in range(A_hist.shape[0]):
+        print(
+            f"  t={t} s_max={int(s_max_arr[t])} edges={int(n_edges[t])}  "
+            f"skel={sk_f1[t]:.3f} pat={pat_f1[t]:.3f} SHD={int(shd[t])}"
+        )
     print(
         f"  final SHD={int(shd[-1])}  "
         f"skel F1={sk_f1[-1]:.3f}  dir F1={dir_f1[-1]:.3f}  "
         f"pattern F1={pat_f1[-1]:.3f}  edges={int(n_edges[-1])}"
     )
+    if sk_f1[-1] < 0.999 or pat_f1[-1] < 0.999:
+        print(
+            "WARNING: hero trajectory did not reach perfect recovery; "
+            "consider retuning SEED / TICKS.",
+            file=sys.stderr,
+        )
 
     print("Rendering animation assets (GIF + MP4)…")
     gif_path, mp4_path = render_animation(A_hist, E_hist, A_true)
