@@ -6,50 +6,50 @@
 [![JAX](https://img.shields.io/badge/JAX-XLA-blue.svg)](https://github.com/jax-ml/jax)
 [![Python Versions](https://img.shields.io/pypi/pyversions/causal-automata.svg?cache=1)](https://pypi.org/project/causal-automata/)
 
-Classical constraint-based causal discovery (PC / Meek orientation rules) relies on sequential branching and dynamic conditioning sets that bottleneck on CPU. `causal-automata` reformulates structure learning as a synchronous, strictly acyclic dynamical system over an adjacency matrix \(A_t\) and a 1D topological potential field \(E_t\) ("Gravity"), compiling into a single XLA `jax.lax.scan` loop on GPU/TPU.
+## What It Does
+
+`causal-automata` learns causal DAGs — and their Markov equivalence classes (CPDAGs) — from observational tabular data shaped `(n_samples, n_features)`. It evolves candidate edges with parallel `birth` and progressive `s=1..k` conditional-independence `death`, while a continuous node-elevation field (`V-well` + `gravity`) orients the graph downhill. Every update runs synchronously on a JAX / NumPy grid, compiling into a single XLA `jax.lax.scan` loop on GPU/TPU.
+
+## From Empty Grid to True Causal DAG
+
+Tick 0 starts edgeless (`A₀ = 0`) against a faint grey ground-truth ghost. Parallel birth sparks cyan (correct), amber (reversed), and dashed-red (false-positive) edges; progressive `s=1→s=2→s=3` death + V-well gravity then prune and flip until every grey ghost is covered.
+
+<p align="center">
+  <img src="assets/elevation_convergence.gif" alt="causal-automata v0.3.6: empty grid to true DAG with ground-truth ghost reference" width="900"/>
+</p>
+
+<p align="center">
+  <a href="assets/elevation_convergence.mp4">▶ MP4 (iPhone)</a>
+  · regenerate with <code>python scripts/generate_hero_gif.py</code>
+</p>
+
+## 30-Second Quickstart
 
 ```bash
 pip install "causal-automata[jax]"
 ```
 
----
+```python
+from causal_automata import CausalAutomaton
 
-## Convergence animation
-
-Short clip of the elevation field \(E_t\) and adjacency \(A_t\) peeling off a flat \(E\approx 0.5\) plateau (`corr_flat` init) toward the ground-truth DAG (Phase-2 N=10 demo) under **v0.3.6** dynamics. The live overlay tracks tick, `s_max`, edge count, Skeleton F1, and Pattern F1 as transitive chords prune and the graph orients.
-
-<p align="center">
-  <img src="assets/elevation_convergence.gif" alt="Elevation field E_t and DAG convergence (v0.3.6)" width="850"/>
-</p>
-
-<p align="center">
-  <a href="assets/elevation_convergence.mp4">▶ MP4 (iPhone)</a>
-</p>
-
-- **Downhill Acyclicity by Construction (\(O(N^2)\) projection):** Edges only flow from higher elevation \(E_i\) to lower elevation \(E_j\) (\(E_i > E_j\)), guaranteeing a strict DAG without \(O(N^3)\) matrix-exponential penalties. (A full tick with dense pair scores and batched \((2+k)\times(2+k)\) inversions still scales closer to \(O(N^3)\).)
-- **V-Wells + Anti-Sink:** Statistical explaining-away colliders sink in \(E\); non-collider unshielded centers are raised so spurious v-structures cannot form.
-- **Closed-form Sepset screens (v0.3.6):** Exact `s=1` neighbor partials + PC-consistent endpoint-local `s≥2` combos with Berkson collider exclusion cut denser-ER false positives.
-
-Regenerate the animation assets locally (GIF + MP4; needs `ffmpeg` for the MP4):
-
-```bash
-python scripts/generate_hero_gif.py
+A = CausalAutomaton(ticks=100, k=3).fit_predict(X)  # X: (n_samples, n_features)
+# Optional Markov equivalence class:
+# C = CausalAutomaton(ticks=100, k=3).fit_predict(X, return_cpdag=True)
 ```
 
----
+## Specs at a Glance
 
-### Benchmark Highlights (Benchpress Suite)
+Official [Benchpress](https://github.com/felixleopoldo/benchpress) holdout — Erdős–Rényi Gaussian DAGs, **ER p=20, n=1000, seeds 1..5**:
 
-Official [Benchpress](https://github.com/felixleopoldo/benchpress) Singularity/Apptainer pipeline — Erdős–Rényi Gaussian DAGs, **p=20, n=1000, seeds 1..5**:
+| Algorithm | Method Family | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) | Time (s) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **BiDAG Order MCMC** | Score-based MCMC | `0.992 ± 0.011` | `0.992 ± 0.011` | `0.4 ± 0.5` | `0.78` |
+| **Causal Automata (v0.3.6)** | **Cellular Automaton (Ours)** | **0.972 ± 0.036** | **0.933 ± 0.075** | **3.4 ± 4.4** | **4.28** |
+| **NOTEARS (Linear)** | Continuous Optimization | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` | `1.89` |
+| **PC (Gaussian CI)** | Classical Constraint-Based | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` | `0.10` |
+| **GOLEM (EV)** | Continuous Likelihood | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` | `4.08` |
 
-| Algorithm | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) |
-| :--- | :---: | :---: | :---: |
-| **Causal Automata (v0.3.6)** | `0.972 ± 0.036` | `0.933 ± 0.075` | `3.4 ± 4.4` |
-| NOTEARS (Linear) | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` |
-| PC (Gaussian CI) | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` |
-| GOLEM (EV) | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` |
-
-`causal-automata` beats `notears_linear`, `pc_gaussian`, and `golem_ev` on Pattern F1 and SHD across all 5 seeds, with exact skeleton recovery (`1.000`) on multiple seeds. Full table + methodology → [Benchmarks](#benchmarks-benchpress--n100).
+`causal-automata` beats `notears_linear`, `pc_gaussian`, and `golem_ev` on Pattern F1 and SHD across all 5 seeds, with exact skeleton recovery (`1.000`) on multiple seeds. Full methodology and N=100 harness → [Benchmarks](#benchmarks-benchpress--n100).
 
 ---
 
@@ -121,14 +121,13 @@ python -m causal_automata.benchmark --smoke   # device checks + GOLEM init only
 
 ---
 
-## 30-Second Quickstart
+## Install options & low-level JAX API
 
 ```bash
 pip install causal-automata
-# With CPU JAX:
-pip install "causal-automata[jax]"
-# NVIDIA CUDA JAX:
-pip install "causal-automata[cuda]"
+pip install "causal-automata[jax]"     # CPU JAX
+pip install "causal-automata[cuda]"    # NVIDIA CUDA JAX
+uv add "causal-automata[jax]"
 ```
 
 High-level estimator (auto Fisher-z thresholds from `n_samples`):
@@ -149,14 +148,11 @@ from causal_automata import step, run, binarize, warmup
 print(warmup())  # compile on a tiny problem
 
 N = 10
-A0 = jnp.triu(jnp.ones((N, N)), k=1) * 0.0   # or a random DAG init
+A0 = jnp.zeros((N, N))
 E0 = jnp.linspace(1.0, 0.0, N)
 Cov = jnp.eye(N)  # replace with empirical covariance of your data
 
-# One tick
 A1, E1 = step(A0, E0, Cov, k=3)
-
-# Full synchronous scan (JIT; ticks & k are static_argnames)
 A_final, E_final = run(A0, E0, Cov, ticks=100, k=3)
 A_bin = binarize(A_final)
 ```
@@ -169,15 +165,9 @@ python -m causal_automata.bayesian_synth --n 50 --backend jax
 python -m causal_automata.bayesian_synth --n 100
 ```
 
-Or with `uv`:
-
-```bash
-uv add "causal-automata[jax]"
-```
-
 ---
 
-## How the 4 Dynamical Rules Work
+## How It Works: Cellular Automaton Physics
 
 State is a binary DAG adjacency \(A\), node elevations \(E \in [0,1]\), and a fixed empirical covariance \(\mathrm{Cov}\) from continuous observations. Each tick is a local cellular update (**gravity → V-well → death → birth**):
 
