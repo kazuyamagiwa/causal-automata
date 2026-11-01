@@ -5,6 +5,8 @@ on:
   release:
     types: [published]
 
+permissions: {}
+
 jobs:
   build-and-publish:
     name: Build and publish Python distribution
@@ -21,6 +23,8 @@ jobs:
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5 # The official astral action
