@@ -7,13 +7,11 @@ Benchmarks
 and scale-free DAGs, and the in-repo N=100 linear-Gaussian harness vs
 gCastle PC / GOLEM.
 
-Benchpress — NVIDIA A10 full run (``runpod_full``)
-----------------------------------------------------
+Benchpress — NVIDIA A10 full run
+--------------------------------
 
 Benchmarks run with Benchpress on NVIDIA A10. Package under test:
-``causal-automata==0.3.6`` (GPU/JAX). Integration is evaluated in
-Benchpress (module PR open); this is not an official Benchpress
-endorsement.
+``causal-automata==0.3.6`` (GPU/JAX).
 
 Design
 ~~~~~~
