@@ -48,84 +48,9 @@ Benchmarks run with [Benchpress](https://github.com/felixleopoldo/benchpress) on
 | PC | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 | 80.4 ± 342 |
 | GOLEM | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 | 18.5 ± 11.2 |
 
-CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F1, and beats PC on pattern more often than not. Full methods, paired wins, MCMC ceiling, and by-family tables → [Read the Docs](https://causal-automata.readthedocs.io/en/latest/benchmarks.html) · in-repo N=100 harness below.
+CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F1, and has higher pattern F1 than PC in most paired cells.
 
----
-
-## Benchmarks (Benchpress + N=100)
-
-### Benchpress on NVIDIA A10
-
-Benchmarks run with Benchpress on NVIDIA A10 (Lambda Cloud; Apptainer `--nv`). Design: pcalg random DAGs (Erdős–Rényi + scale-free/power), `p ∈ {20,50,80,100}`, avg degree `d=4`, `n=1000` continuous SEM samples, seeds `1..10` → **80 cells**. Algorithms: Causal Automata (`v0.3.6`, GPU/JAX), NOTEARS (`gcastle_notears` linear), PC (`pcalg_pc` Gaussian), GOLEM (`gcastle_golem` EV). FGES/Tetrad omitted (metric fields all NA). BiDAG order-MCMC (hardlimit=16) used as an accuracy ceiling where it finished (**63/80**; ER 40/40, SF 23/40).
-
-| Algorithm | n | F1 skeleton | F1 pattern | SHD pattern | time (s) |
-| :--- | ---: | :---: | :---: | :---: | :---: |
-| **Causal Automata** | 80/80 | 0.822 ± 0.088 | 0.754 ± 0.121 | 50.1 ± 40.3 | **0.76 ± 0.32** |
-| NOTEARS | 80/80 | 0.896 ± 0.056 | 0.768 ± 0.092 | 39.0 ± 18.9 | 31.4 ± 29.5 |
-| PC | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 | 80.4 ± 342 |
-| GOLEM | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 | 18.5 ± 11.2 |
-| BiDAG MCMC† | 63/80 | 0.936 ± 0.049 | 0.872 ± 0.093 | 33.7 ± 34.9 | 10.9 ± 16.6 |
-
-† Completed-cell mean only (ER 40/40, SF 23/40; missing SF seeds at `p≥50` from BiDAG itsearch parent-set hardlimit=16).
-
-- **Speed:** CA ~0.5–1.2s through `p=100`; NOTEARS tens of seconds; PC can explode on scale-free; GOLEM ~5–35s.
-- **Accuracy:** CA ≫ GOLEM; beats PC on pattern more often than not; neck-and-neck with NOTEARS on pattern (NOTEARS stronger on skeleton).
-- **Ceiling:** Where BiDAG order-MCMC finishes, it sets a higher bar (~9× median / ~14× mean slower) — expensive oracle, not a default.
-- **Graphs:** On pcalg ER/SF, CA is not simply “ER good / SF bad”; SF pattern F1 often matches or exceeds ER (high seed variance).
-
-Paired F1 pattern win rates (same family × `p` × seed): vs NOTEARS 46% (Δ −0.014), vs PC 62% (Δ +0.042), vs GOLEM 99% (Δ +0.286), vs MCMC 22% (Δ −0.110). Skeleton: NOTEARS/PC lead; CA FP-leaning (~58% of FP+FN).
-
-Full by-family × `p` tables, hardware fingerprint, and MCMC overlap details: [Read the Docs — Benchmarks](https://causal-automata.readthedocs.io/en/latest/benchmarks.html).
-
-Powering the engine (`v0.3.2`–`v0.3.6`): sample-size-adaptive Fisher-z thresholds (`CausalAutomaton.fit`), closed-form `s=1` singleton and `s=2` 2-node recursive Sepset screening, PC-consistent endpoint-local neighbor conditioning, Berkson collider exclusion from separator pools, and V-well / non-collider anti-sink elevation dynamics. See [CHANGELOG.md](CHANGELOG.md).
-
-### N=100 linear-Gaussian SEM (gCastle harness)
-
-> **Wall-clock vs accuracy:** On the N=100 linear-Gaussian SEM (`seed=0`, `ticks=100`), Bayesian CA finishes in **~2.9s** on CPU JAX — about **180×** faster than PC (gcastle, 528s) — while Maximum Accuracy Mode (`--multihop`) reaches **Directed F1 0.696** / Skeleton F1 **0.928**. Reproduce with:
->
-> ```bash
-> python -m causal_automata.benchmark --n 100 --seed 0 --ticks 100
-> ```
-
-Default stack (Upgrade 2): **`k=3` if N≤50**, **`k=5` if N>50**, binary edges, 1-hop gravity. On N=100 (`seed=0`, static thresholds, `ticks=100`) that baseline hits Skeleton **0.937** / Directed **0.619** in about **2.8s**.
-
-**Maximum Accuracy Mode** — pass **`--multihop`** (Upgrade 4): 2-hop elevation gravity via `A @ A` lifts Directed F1 to **0.696** with essentially flat wall time.
-
-| Algorithm | Skeleton F1 | Directed F1 | Wall Time (s) |
-| --- | ---: | ---: | ---: |
-| PC (gcastle) | 0.968 | 0.813 | 528.631 |
-| GOLEM (gcastle) | 0.577 | 0.403 | 251.182 |
-| Bayesian CA (JAX, k=5, 1-hop) | **0.937** | 0.619 | ~2.9 |
-| Bayesian CA (JAX, k=5, `--multihop`) | 0.928 | **0.696** | ~2.9 |
-
-PC / GOLEM wall times are Colab **Tesla T4** (`num_iter=20000`). CA times are CPU JAX for the Upgrade-2 / Upgrade-4 A/B; at historical `k=3` the same CA finished in **0.323s** on T4 with Directed F1 **0.483**.
-
-Opt-in flags (defaults stay fast & binary):
-
-- **`--multihop`** — Maximum Accuracy Mode (2-hop gravity, Directed F1 **0.696** on this SEM).
-- **`--fuzzy`** — continuous `A ∈ [0, 1]` soft birth/death (experimental; did not beat binary here).
-
-Conditioning-set sweep (CA-only, 1-hop binary, same SEM):
-
-| Algorithm | Skeleton F1 | Directed F1 | Wall Time (s) |
-| --- | ---: | ---: | ---: |
-| Bayesian CA (JAX, k=3) | 0.812 | 0.483 | 2.314 |
-| Bayesian CA (JAX, k=4) | 0.915 | 0.546 | 2.481 |
-| Bayesian CA (JAX, k=5) | **0.937** | **0.619** | **2.871** |
-| Bayesian CA (JAX, k=6) | 0.937 | 0.619 | 2.454 |
-| Bayesian CA (JAX, k=7) | 0.937 | 0.619 | 3.049 |
-| Bayesian CA (JAX, k=8) | 0.937 | 0.627 | 3.647 |
-
-More benchmark variants:
-
-```bash
-# Maximum Accuracy Mode (Upgrade 4) — Directed F1 0.696 on the N=100 SEM
-python -m causal_automata.benchmark --n 100 --ca-only --k 5 --multihop
-python -m causal_automata.benchmark --n 100 --ca-only --k 5 --compare-multihop
-
-python -m causal_automata.benchmark --n 100 --ca-only --k-sweep 5,6,7,8
-python -m causal_automata.benchmark --smoke   # device checks + GOLEM init only
-```
+See [Read the Docs — Benchmarks](https://causal-automata.readthedocs.io/en/latest/benchmarks.html) for full details: methods, hardware, paired wins, MCMC ceiling (partial SF coverage), by-family × `p` tables, and the in-repo N=100 gCastle harness.
 
 ---
 
