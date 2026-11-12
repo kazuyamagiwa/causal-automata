@@ -129,6 +129,6 @@ v0.3.6 mirrors that discipline inside the cellular update:
 
 Together with sample-size-adaptive Fisher-z thresholds
 (:func:`~causal_automata.fisher_z_threshold`) and CPDAG conversion
-(:func:`~causal_automata.dag_to_cpdag`), these rules lift Pattern F1 on
-the Benchpress ER ``p=20``, ``n=1000``, 5-seed suite to
-``0.933 ± 0.075`` (SHD ``3.4 ± 4.4``) — see :doc:`benchmarks`.
+(:func:`~causal_automata.dag_to_cpdag`), these rules reach Pattern F1
+``0.754 ± 0.121`` (SHD ``50.1 ± 40.3``) on the Benchpress A10 full run
+(ER + scale-free, 80 cells) — see :doc:`benchmarks`.
