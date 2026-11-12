@@ -39,36 +39,43 @@ A = CausalAutomaton(ticks=100, k=3).fit_predict(X)  # X: (n_samples, n_features)
 
 ## Specs at a Glance
 
-Official [Benchpress](https://github.com/felixleopoldo/benchpress) holdout — Erdős–Rényi Gaussian DAGs, **ER p=20, n=1000, seeds 1..5**:
+Benchmarks run with [Benchpress](https://github.com/felixleopoldo/benchpress) on **NVIDIA A10** (Lambda Cloud) — pcalg ER + scale-free DAGs, `p ∈ {20,50,80,100}`, `d=4`, `n=1000`, seeds `1..10` (**80 cells**), `causal-automata==0.3.6`:
 
-| Algorithm | Method Family | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) | Time (s) |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **BiDAG Order MCMC** | Score-based MCMC | `0.992 ± 0.011` | `0.992 ± 0.011` | `0.4 ± 0.5` | `0.78` |
-| **Causal Automata (v0.3.6)** | **Cellular Automaton (Ours)** | **0.972 ± 0.036** | **0.933 ± 0.075** | **3.4 ± 4.4** | **0.360** |
-| **NOTEARS (Linear)** | Continuous Optimization | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` | `1.89` |
-| **PC (Gaussian CI)** | Classical Constraint-Based | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` | `0.098` |
-| **GOLEM (EV)** | Continuous Likelihood | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` | `4.08` |
+| Algorithm | n | F1 skeleton | F1 pattern | SHD pattern | time (s) |
+| :--- | ---: | :---: | :---: | :---: | :---: |
+| **Causal Automata** | 80/80 | 0.822 ± 0.088 | 0.754 ± 0.121 | 50.1 ± 40.3 | **0.76 ± 0.32** |
+| NOTEARS | 80/80 | 0.896 ± 0.056 | 0.768 ± 0.092 | 39.0 ± 18.9 | 31.4 ± 29.5 |
+| PC | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 | 80.4 ± 342 |
+| GOLEM | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 | 18.5 ± 11.2 |
 
-Faster **and** more accurate than continuous optimization: beats `notears_linear` and `golem_ev` on Pattern F1 (`0.933` vs `0.811` / `0.587`) and discovery speed (`0.360s` vs `1.89s` / `4.08s` — **5.2×** / **11.3×**). Full methodology and N=100 harness → [Benchmarks](#benchmarks-benchpress--n100).
+CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F1, and beats PC on pattern more often than not. Full methods, paired wins, MCMC ceiling, and by-family tables → [Read the Docs](https://causal-automata.readthedocs.io/en/latest/benchmarks.html) · in-repo N=100 harness below.
 
 ---
 
 ## Benchmarks (Benchpress + N=100)
 
-### Benchpress Benchmark Comparison (`ER p=20, n=1000`, 5 Seeds)
+### Benchpress on NVIDIA A10
 
-Evaluated via the official Benchpress Singularity/Apptainer pipeline (`causal_automata` = this package `v0.3.6`), seeds `1..5`:
+Benchmarks run with Benchpress on NVIDIA A10 (Lambda Cloud; Apptainer `--nv`). Design: pcalg random DAGs (Erdős–Rényi + scale-free/power), `p ∈ {20,50,80,100}`, avg degree `d=4`, `n=1000` continuous SEM samples, seeds `1..10` → **80 cells**. Algorithms: Causal Automata (`v0.3.6`, GPU/JAX), NOTEARS (`gcastle_notears` linear), PC (`pcalg_pc` Gaussian), GOLEM (`gcastle_golem` EV). FGES/Tetrad omitted (metric fields all NA). BiDAG order-MCMC (hardlimit=16) used as an accuracy ceiling where it finished (**63/80**; ER 40/40, SF 23/40).
 
-| Algorithm | Benchpress ID | Skeleton F1 (↑) | Pattern / CPDAG F1 (↑) | Pattern SHD (↓) | Wall Time (s) |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **BiDAG Order MCMC** | `iterative_mcmc` | `0.992 ± 0.011` | `0.992 ± 0.011` | `0.4 ± 0.5` | `0.78 ± 0.05` |
-| **Causal Automata (v0.3.6)** | `causal_automata` | **0.972 ± 0.036** | **0.933 ± 0.075** | **3.4 ± 4.4** | **0.360 ± 0.003** |
-| **NOTEARS (Linear)** | `notears_linear` | `0.925 ± 0.048` | `0.811 ± 0.130` | `8.8 ± 7.4` | `1.89 ± 1.51` |
-| **PC (Gaussian CI)** | `pc_gaussian` | `0.902 ± 0.046` | `0.743 ± 0.082` | `10.4 ± 3.9` | `0.098 ± 0.021` |
-| **GOLEM (EV)** | `golem_ev` | `0.771 ± 0.091` | `0.587 ± 0.115` | `19.4 ± 10.1` | `4.08 ± 0.10` |
+| Algorithm | n | F1 skeleton | F1 pattern | SHD pattern | time (s) |
+| :--- | ---: | :---: | :---: | :---: | :---: |
+| **Causal Automata** | 80/80 | 0.822 ± 0.088 | 0.754 ± 0.121 | 50.1 ± 40.3 | **0.76 ± 0.32** |
+| NOTEARS | 80/80 | 0.896 ± 0.056 | 0.768 ± 0.092 | 39.0 ± 18.9 | 31.4 ± 29.5 |
+| PC | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 | 80.4 ± 342 |
+| GOLEM | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 | 18.5 ± 11.2 |
+| BiDAG MCMC† | 63/80 | 0.936 ± 0.049 | 0.872 ± 0.093 | 33.7 ± 34.9 | 10.9 ± 16.6 |
 
-- **Faster and more accurate than continuous optimization:** `causal-automata` beats `notears_linear` and `golem_ev` on all 5 seeds in both structural accuracy (`0.933` Pattern F1 vs. `0.811` and `0.587`) and discovery speed (`0.360s` vs. `1.89s` and `4.08s` — a **5.2×** and **11.3×** speedup). Exact skeleton recovery (`1.000`) on multiple seeds; also ahead of classical `pc_gaussian` on Pattern F1 / SHD (`0.933` / `3.4` vs. `0.743` / `10.4`).
-- **Deterministic O(1)-variance runtime (± 0.003s):** Because the cellular automaton evolves a fixed-shape tensor grid under `@jax.jit`, runtime is nearly invariant to graph density (`0.357s`–`0.363s` across sparse 11-edge and dense 28-edge DAGs), unlike iterative solvers whose runtime fluctuates heavily with conditioning clutter. Reported time is post-XLA warmup on matching `(n, p, k, ticks)` static shapes; one-time cold XLA compilation adds ~3.8s on the first run.
+† Completed-cell mean only (ER 40/40, SF 23/40; missing SF seeds at `p≥50` from BiDAG itsearch parent-set hardlimit=16).
+
+- **Speed:** CA ~0.5–1.2s through `p=100`; NOTEARS tens of seconds; PC can explode on scale-free; GOLEM ~5–35s.
+- **Accuracy:** CA ≫ GOLEM; beats PC on pattern more often than not; neck-and-neck with NOTEARS on pattern (NOTEARS stronger on skeleton).
+- **Ceiling:** Where BiDAG order-MCMC finishes, it sets a higher bar (~9× median / ~14× mean slower) — expensive oracle, not a default.
+- **Graphs:** On pcalg ER/SF, CA is not simply “ER good / SF bad”; SF pattern F1 often matches or exceeds ER (high seed variance).
+
+Paired F1 pattern win rates (same family × `p` × seed): vs NOTEARS 46% (Δ −0.014), vs PC 62% (Δ +0.042), vs GOLEM 99% (Δ +0.286), vs MCMC 22% (Δ −0.110). Skeleton: NOTEARS/PC lead; CA FP-leaning (~58% of FP+FN).
+
+Full by-family × `p` tables, hardware fingerprint, and MCMC overlap details: [Read the Docs — Benchmarks](https://causal-automata.readthedocs.io/en/latest/benchmarks.html).
 
 Powering the engine (`v0.3.2`–`v0.3.6`): sample-size-adaptive Fisher-z thresholds (`CausalAutomaton.fit`), closed-form `s=1` singleton and `s=2` 2-node recursive Sepset screening, PC-consistent endpoint-local neighbor conditioning, Berkson collider exclusion from separator pools, and V-well / non-collider anti-sink elevation dynamics. See [CHANGELOG.md](CHANGELOG.md).
 

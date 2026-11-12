@@ -1,74 +1,250 @@
 Benchmarks
 ==========
 
-**causal-automata** v0.3.6 is evaluated on two tracks: the official
-`Benchpress <https://github.com/felixleopoldo/benchpress>`_ Singularity /
-Apptainer suite (Erdős–Rényi Gaussian DAGs) and the in-repo N=100
-linear-Gaussian harness vs gCastle PC / GOLEM.
+**causal-automata** v0.3.6 is evaluated on two tracks: a full
+`Benchpress <https://github.com/felixleopoldo/benchpress>`_ suite on
+**NVIDIA A10** (Lambda Cloud; Apptainer ``--nv``) over pcalg Erdős–Rényi
+and scale-free DAGs, and the in-repo N=100 linear-Gaussian harness vs
+gCastle PC / GOLEM.
 
-Benchpress — ER ``p=20``, ``n=1000``, 5 seeds
----------------------------------------------
+Benchpress — NVIDIA A10 full run
+--------------------------------
 
-Official Benchpress pipeline (``causal_automata`` = this package
-``v0.3.6``), seeds ``1..5``:
+Benchmarks run with Benchpress on NVIDIA A10. Package under test:
+``causal-automata==0.3.6`` (GPU/JAX).
+
+Design
+~~~~~~
+
+* **Graphs:** pcalg random DAGs — Erdős–Rényi (ER) and scale-free /
+  power (SF).
+* **Sizes:** ``p ∈ {20, 50, 80, 100}``, average degree ``d=4``,
+  ``n=1000`` samples, seeds ``1..10`` → **80 cells**.
+* **Data:** continuous SEM (``sem_params`` min=0.25 max=1), standardized
+  IID observations.
+* **Algorithms:**
+
+  * **Causal Automata (CA)** — this package, GPU/JAX in Apptainer
+    ``--nv``
+  * **NOTEARS** — ``gcastle_notears`` (linear)
+  * **PC** — ``pcalg_pc`` (Gaussian)
+  * **GOLEM** — ``gcastle_golem`` (EV)
+  * **BiDAG order-MCMC** — hardlimit=16; accuracy ceiling where
+    completed
+
+* **Excluded:** FGES / Tetrad — metric fields all NA (not reported).
+
+Hardware fingerprint
+~~~~~~~~~~~~~~~~~~~~
+
+* GPU: NVIDIA A10, 23028 MiB, driver 580.105.08
+* CPU: 30× Xeon Platinum 8358 @ 2.60GHz; ~222 GiB RAM
+* Host: Ubuntu 22.04 / Lambda Stack; Apptainer 1.5.5
+
+Overall results (mean ± std over usable cells)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
-   :widths: 28 22 16 18 14 14
+   :widths: 22 10 16 16 16 14
 
    * - Algorithm
-     - Benchpress ID
-     - Skeleton F1 (↑)
-     - Pattern / CPDAG F1 (↑)
-     - Pattern SHD (↓)
-     - Wall Time (s)
-   * - **BiDAG Order MCMC**
-     - ``iterative_mcmc``
-     - ``0.992 ± 0.011``
-     - ``0.992 ± 0.011``
-     - ``0.4 ± 0.5``
-     - ``0.78 ± 0.05``
-   * - **Causal Automata (v0.3.6)**
-     - ``causal_automata``
-     - ``0.972 ± 0.036``
-     - ``0.933 ± 0.075``
-     - ``3.4 ± 4.4``
-     - ``0.360 ± 0.003``
-   * - **NOTEARS (Linear)**
-     - ``notears_linear``
-     - ``0.925 ± 0.048``
-     - ``0.811 ± 0.130``
-     - ``8.8 ± 7.4``
-     - ``1.89 ± 1.51``
-   * - **PC (Gaussian CI)**
-     - ``pc_gaussian``
-     - ``0.902 ± 0.046``
-     - ``0.743 ± 0.082``
-     - ``10.4 ± 3.9``
-     - ``0.098 ± 0.021``
-   * - **GOLEM (EV)**
-     - ``golem_ev``
-     - ``0.771 ± 0.091``
-     - ``0.587 ± 0.115``
-     - ``19.4 ± 10.1``
-     - ``4.08 ± 0.10``
+     - n
+     - F1 skeleton
+     - F1 pattern
+     - SHD pattern
+     - time (s)
+   * - **Causal Automata**
+     - 80/80
+     - 0.822 ± 0.088
+     - 0.754 ± 0.121
+     - 50.1 ± 40.3
+     - **0.76 ± 0.32**
+   * - NOTEARS
+     - 80/80
+     - 0.896 ± 0.056
+     - 0.768 ± 0.092
+     - 39.0 ± 18.9
+     - 31.4 ± 29.5
+   * - PC
+     - 71/80
+     - 0.888 ± 0.061
+     - 0.720 ± 0.085
+     - 50.4 ± 27.5
+     - 80.4 ± 342
+   * - GOLEM
+     - 80/80
+     - 0.679 ± 0.086
+     - 0.469 ± 0.084
+     - 95.2 ± 55.5
+     - 18.5 ± 11.2
+   * - BiDAG MCMC
+     - 63/80
+     - 0.936 ± 0.049
+     - 0.872 ± 0.093
+     - 33.7 ± 34.9
+     - 10.9 ± 16.6
 
-* **Faster and more accurate than continuous optimization.**
-  ``causal-automata`` (``v0.3.6``) beats ``notears_linear`` and
-  ``golem_ev`` on **all 5 seeds** in both structural accuracy
-  (Pattern F1 ``0.933`` vs. ``0.811`` / ``0.587``) and discovery speed
-  (``0.360s`` vs. ``1.89s`` / ``4.08s`` — a **5.2×** and **11.3×**
-  speedup). Exact skeleton recovery (``1.000``) on multiple seeds; also
-  ahead of classical ``pc_gaussian`` on Pattern F1 / SHD
-  (``0.933`` / ``3.4`` vs. ``0.743`` / ``10.4``).
-* **Deterministic O(1)-variance runtime (``± 0.003s``).**
-  Because the cellular automaton evolves a fixed-shape tensor grid under
-  ``@jax.jit``, runtime is nearly invariant to graph density
-  (``0.357s``–``0.363s`` across sparse 11-edge and dense 28-edge DAGs),
-  unlike iterative solvers whose runtime fluctuates heavily with
-  conditioning clutter. Reported time is **post-XLA warmup** on matching
-  ``(n, p, k, ticks)`` static shapes; one-time cold XLA compilation adds
-  ~``3.8s`` on the first run.
+Notes:
+
+* **PC:** 71 cells with usable F1 (some SF failures/timeouts); time mean
+  inflated by SF outliers.
+* **BiDAG MCMC:** completed-cell mean only. Coverage **ER 40/40**,
+  **SF 23/40** (missing seeds at ``p≥50`` due to BiDAG itsearch
+  parent-set hardlimit=16). Do not treat SF MCMC means as full coverage.
+
+Takeaways
+~~~~~~~~~
+
+* **Speed:** CA ~0.5–1.2s through ``p=100``; NOTEARS tens of seconds; PC
+  can explode on SF; GOLEM ~5–35s.
+* **Accuracy:** CA ≫ GOLEM; beats PC on pattern more often than not;
+  neck-and-neck with NOTEARS on pattern (NOTEARS stronger on skeleton).
+* **Ceiling:** Where BiDAG order-MCMC finishes, it sets a higher bar
+  (~9× median / ~14× mean slower) — expensive oracle, not a default.
+* **Graphs:** On pcalg ER/SF, CA is not simply “ER good / SF bad”; SF
+  pattern F1 often matches or exceeds ER, with high seed variance.
+
+Paired wins (same family × ``p`` × seed; CA vs other)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**F1 pattern — CA win rate**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 14 14 14 22
+
+   * - vs
+     - n paired
+     - CA wins
+     - CA loses
+     - mean Δ (CA − other)
+   * - NOTEARS
+     - 80
+     - 37 (**46%**)
+     - 43
+     - −0.014
+   * - PC
+     - 71
+     - 44 (**62%**)
+     - 27
+     - +0.042
+   * - GOLEM
+     - 80
+     - 79 (**99%**)
+     - 1
+     - +0.286
+   * - BiDAG MCMC
+     - 63
+     - 14 (**22%**)
+     - 49
+     - −0.110
+
+**F1 skeleton — CA win rate**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 10 18 16
+
+   * - vs
+     - n
+     - CA wins
+     - mean Δ
+   * - NOTEARS
+     - 80
+     - 10 (12%)
+     - −0.074
+   * - PC
+     - 71
+     - 12 (17%)
+     - −0.060
+   * - GOLEM
+     - 80
+     - 76 (95%)
+     - +0.143
+   * - BiDAG MCMC
+     - 63
+     - 6 (10%)
+     - −0.107
+
+CA skeleton errors are FP-leaning (~58% of FP+FN).
+
+MCMC as accuracy ceiling (overlap only)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+BiDAG order-MCMC completed **63/80** cells (ER 40/40, SF 23/40). On the
+overlap:
+
+* **ER** (n=40): CA F1 pattern 0.728 vs MCMC 0.848; times ~0.76s vs
+  ~6.7s
+* **SF** (n=23): CA F1 pattern 0.822 vs MCMC 0.915; times ~0.65s vs
+  ~17.9s
+* Runtime ratio MCMC/CA: **~9× median**, **~14× mean**
+
+By family × ``p`` (mean F1 pattern / mean time)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 14 16 16 14 18
+
+   * - Cell
+     - CA
+     - NOTEARS
+     - PC
+     - GOLEM
+     - MCMC
+   * - ER p=20
+     - 0.69 / 0.5s
+     - 0.66 / 11s
+     - 0.67 / 0.2s
+     - 0.45 / 6s
+     - 0.92 / 1.4s
+   * - ER p=50
+     - 0.70 / 0.5s
+     - 0.80 / 22s
+     - 0.72 / 0.6s
+     - 0.41 / 11s
+     - 0.89 / 4s
+   * - ER p=80
+     - 0.76 / 0.8s
+     - 0.80 / 45s
+     - 0.74 / 1.1s
+     - 0.41 / 23s
+     - 0.82 / 9s
+   * - ER p=100
+     - 0.76 / 1.2s
+     - 0.85 / 53s
+     - 0.76 / 1.5s
+     - 0.42 / 34s
+     - 0.77 / 13s
+   * - SF p=20
+     - 0.79 / 0.5s
+     - 0.69 / 4s
+     - 0.75 / 0.4s
+     - 0.52 / 6s
+     - 0.96 / 1.5s
+   * - SF p=50
+     - 0.72 / 0.5s
+     - 0.75 / 27s
+     - 0.69 / 271s\*
+     - 0.50 / 11s
+     - 0.88 / 22s (n=6)
+   * - SF p=80
+     - 0.80 / 0.8s
+     - 0.80 / 36s
+     - 0.70 / 315s\*
+     - 0.52 / 22s
+     - 0.89 / 38s (n=3)
+   * - SF p=100
+     - 0.80 / 1.2s
+     - 0.78 / 54s
+     - 0.70 / 223s\*
+     - 0.53 / 35s
+     - 0.86 / 38s (n=4)
+
+\* PC SF times include severe outliers / incomplete seeds. MCMC SF rows
+at ``p≥50`` are completed-cell means only (not full 10-seed coverage).
 
 Mechanisms powering these numbers (``v0.3.2``–``v0.3.6``):
 
@@ -173,8 +349,8 @@ PC uses gCastle ``variant="stable"`` with Fisher-Z tests. GOLEM uses
 :data:`causal_automata.benchmark.GOLEM_DEFAULT_KWARGS` (no early-stop —
 fixed Adam budget). The CA row warms up JIT outside the timed window.
 
-Benchpress rows above are from the external Singularity/Apptainer
-pipeline (not the gCastle harness).
+Benchpress A10 rows above are from the external Singularity/Apptainer
+pipeline on Lambda Cloud (not the gCastle harness).
 
 Interpreting metrics
 --------------------
@@ -185,10 +361,9 @@ Interpreting metrics
   directed pattern (:func:`~causal_automata.dag_to_cpdag`).
 * **Pattern SHD** — structural Hamming distance on the CPDAG pattern.
 * **Wall time** — algorithm ``learn`` / CA step loop only (data generation
-  excluded). Benchpress ``causal_automata`` times are **post-XLA warmup**
-  on matching ``(n, p, k, ticks)`` static shapes (cold compile ~``3.8s``
-  once); the in-repo gCastle harness also warms JIT outside the timed
-  window.
+  excluded). Benchpress ``causal_automata`` times are measured under
+  Apptainer ``--nv`` on the A10 host above; the in-repo gCastle harness
+  warms JIT outside the timed window.
 
 PC remains a strong accuracy baseline when runtime is acceptable. The
 automaton is aimed at settings where parallel adjacency updates — and
