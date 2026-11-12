@@ -41,12 +41,12 @@ A = CausalAutomaton(ticks=100, k=3).fit_predict(X)  # X: (n_samples, n_features)
 
 Benchmarks run with [Benchpress](https://github.com/felixleopoldo/benchpress) on **NVIDIA A10** (Lambda Cloud) — pcalg ER + scale-free DAGs, `p ∈ {20,50,80,100}`, `d=4`, `n=1000`, seeds `1..10` (**80 cells**), `causal-automata==0.3.6`:
 
-| Algorithm | n | F1 skeleton | F1 pattern | SHD pattern | time (s) |
-| :--- | ---: | :---: | :---: | :---: | :---: |
-| **Causal Automata** | 80/80 | 0.822 ± 0.088 | 0.754 ± 0.121 | 50.1 ± 40.3 | **0.76 ± 0.32** |
-| NOTEARS | 80/80 | 0.896 ± 0.056 | 0.768 ± 0.092 | 39.0 ± 18.9 | 31.4 ± 29.5 |
-| PC | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 | 80.4 ± 342 |
-| GOLEM | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 | 18.5 ± 11.2 |
+| Algorithm | time (s) | usable cells | F1 skeleton | F1 pattern | SHD pattern |
+| :--- | :---: | ---: | :---: | :---: | :---: |
+| **Causal Automata** | **0.76 ± 0.32** | 80/80 | 0.822 ± 0.088 | 0.754 ± 0.121 | 50.1 ± 40.3 |
+| NOTEARS | 31.4 ± 29.5 | 80/80 | 0.896 ± 0.056 | 0.768 ± 0.092 | 39.0 ± 18.9 |
+| PC | 80.4 ± 342 | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 |
+| GOLEM | 18.5 ± 11.2 | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 |
 
 CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F1, and has higher pattern F1 than PC in most paired cells.
 
