@@ -54,7 +54,7 @@ CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F
 
 ## Benchmarks (Benchpress + N=100)
 
-### Benchpress on NVIDIA A10 (`runpod_full`)
+### Benchpress on NVIDIA A10
 
 Benchmarks run with Benchpress on NVIDIA A10 (Lambda Cloud; Apptainer `--nv`). Design: pcalg random DAGs (Erdős–Rényi + scale-free/power), `p ∈ {20,50,80,100}`, avg degree `d=4`, `n=1000` continuous SEM samples, seeds `1..10` → **80 cells**. Algorithms: Causal Automata (`v0.3.6`, GPU/JAX), NOTEARS (`gcastle_notears` linear), PC (`pcalg_pc` Gaussian), GOLEM (`gcastle_golem` EV). FGES/Tetrad omitted (metric fields all NA). BiDAG order-MCMC (hardlimit=16) used as an accuracy ceiling where it finished (**63/80**; ER 40/40, SF 23/40).
 

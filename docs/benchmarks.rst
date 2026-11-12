@@ -102,9 +102,8 @@ Takeaways
   neck-and-neck with NOTEARS on pattern (NOTEARS stronger on skeleton).
 * **Ceiling:** Where BiDAG order-MCMC finishes, it sets a higher bar
   (~9× median / ~14× mean slower) — expensive oracle, not a default.
-* **Graphs:** On official pcalg ER/SF, CA is not simply
-  “ER good / SF bad”; SF pattern F1 often matches or exceeds ER, with
-  high seed variance.
+* **Graphs:** On pcalg ER/SF, CA is not simply “ER good / SF bad”; SF
+  pattern F1 often matches or exceeds ER, with high seed variance.
 
 Paired wins (same family × ``p`` × seed; CA vs other)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
