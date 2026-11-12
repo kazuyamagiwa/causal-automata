@@ -48,7 +48,7 @@ Benchmarks run with [Benchpress](https://github.com/felixleopoldo/benchpress) on
 | PC | 71/80 | 0.888 ± 0.061 | 0.720 ± 0.085 | 50.4 ± 27.5 | 80.4 ± 342 |
 | GOLEM | 80/80 | 0.679 ± 0.086 | 0.469 ± 0.084 | 95.2 ± 55.5 | 18.5 ± 11.2 |
 
-CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F1, and beats PC on pattern more often than not.
+CA stays ~0.5–1.2s through `p=100`, is neck-and-neck with NOTEARS on pattern F1, and has higher pattern F1 than PC in most paired cells.
 
 See [Read the Docs — Benchmarks](https://causal-automata.readthedocs.io/en/latest/benchmarks.html) for full details: methods, hardware, paired wins, MCMC ceiling (partial SF coverage), by-family × `p` tables, and the in-repo N=100 gCastle harness.
 
