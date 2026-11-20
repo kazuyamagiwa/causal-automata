@@ -1,0 +1,290 @@
+%% Causal Automata — arXiv / Zenodo / OSF preprint template
+%% Style: kourgeorge/arxiv-style (MIT) — see paper/README.md
+%% Edit the TODO blocks and compile with: make -C paper
+
+\documentclass{article}
+
+% --- Encoding / fonts / layout (arxiv.sty sets Times + geometry) ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{arxiv}
+
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{natbib}
+\usepackage{xcolor}
+\usepackage{microtype}
+
+% Figures live in figures/ relative to this file
+\graphicspath{{figures/}}
+
+% ---------------------------------------------------------------------------
+% Metadata — fill these in first
+% ---------------------------------------------------------------------------
+\title{Causal Automata: GPU-Native Causal Discovery\\
+via Synchronous Cellular Automata in JAX}
+
+\author{
+  Masakazu Yamagiwa\\
+  Independent Researcher\\
+  \texttt{myamagiwa@gmail.com}
+  % \And
+  % Coauthor Name\\
+  % Affiliation\\
+  % \texttt{email@example.com}
+}
+
+\date{\today}
+
+% Optional header line (arxiv.sty)
+\renewcommand{\headeright}{A Preprint}
+\renewcommand{\undertitle}{A Preprint}
+\renewcommand{\shorttitle}{Causal Automata}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+%% TODO: 150--250 words. State the problem, method, and one quantitative claim.
+We present \emph{causal-automata}, a synchronous cellular-automaton approach to
+structure learning that recovers directed acyclic graphs (DAGs) and their Markov
+equivalence classes (CPDAGs) from observational tabular data.
+Candidate edges evolve under parallel birth and progressive
+conditional-independence death, while a continuous node-elevation field
+(V-well + gravity) orients the graph downhill.
+Every update runs on a JAX / NumPy grid and compiles into a single XLA
+\texttt{jax.lax.scan} loop on GPU/TPU.
+On Benchpress ER and scale-free DAGs (\(p\in\{20,50,80,100\}\), \(n=1000\)),
+causal-automata matches NOTEARS-level pattern F1 at roughly
+\(40\times\) lower wall-clock time on an NVIDIA A10.
+%% Soften or replace the claim above once you freeze the final numbers.
+\end{abstract}
+
+\keywords{causal discovery \and cellular automata \and DAG learning
+  \and JAX \and Markov equivalence \and GPU}
+
+% ===========================================================================
+\section{Introduction}
+\label{sec:intro}
+% ===========================================================================
+
+%% TODO: Motivation → gap → contribution bullets → roadmap.
+
+Observational data yields correlations, not mechanisms.
+Causal discovery aims to recover a DAG \(G=(V,E)\) whose edges encode directed
+influence among measured variables~\citep{spirtes2000,pearl2009}.
+Constraint-based methods such as PC~\citep{spirtes2000} and continuous
+optimization methods such as NOTEARS~\citep{zheng2018} and
+GOLEM~\citep{ng2020} dominate practice, but either scale poorly with
+conditioning-set search or rely on sequential solvers that under-use modern
+accelerators.
+
+We treat adjacency discovery as a \emph{synchronous cellular automaton} on the
+\(p\times p\) edge grid.
+Local rules --- birth, death, V-well explaining-away, and elevation gravity ---
+update every candidate edge in parallel, which maps naturally onto JAX/XLA.
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item A physics-inspired CA formulation of causal discovery with explicit
+        birth / death / V-well / gravity steps
+        (Section~\ref{sec:method}).
+  \item A JAX implementation that compiles the full run into one
+        \texttt{jax.lax.scan} with static \texttt{ticks} and \(k\)
+        (Section~\ref{sec:impl}).
+  \item Empirical comparisons against PC, NOTEARS, and GOLEM on Benchpress
+        and an in-repo gCastle harness (Section~\ref{sec:experiments}).
+\end{itemize}
+
+% ===========================================================================
+\section{Background}
+\label{sec:background}
+% ===========================================================================
+
+%% TODO: Keep short; point to related work for depth.
+
+\paragraph{DAGs and CPDAG equivalence.}
+A DAG encodes d-separation; under faithfulness, conditional independences in
+the observational distribution identify the Markov equivalence class, often
+represented as a CPDAG~\citep{spirtes2000}.
+
+\paragraph{Conditional independence and colliders.}
+Partial correlation (Fisher-\(z\)) tests approximate conditional independence
+for linear-Gaussian data.
+Colliders (V-structures) create dependence upon conditioning and supply an
+orientation signal; we encode that signal as a downward force in elevation
+space (the V-well).
+
+\paragraph{Cellular automata and message passing.}
+Pearl-style belief propagation aggregates local \(\pi\)/\(\lambda\)
+messages~\citep{pearl1988}.
+Cellular automata share the gather--aggregate--update motif; here the lattice
+is the adjacency matrix itself rather than a spatial grid.
+
+% ===========================================================================
+\section{Method}
+\label{sec:method}
+% ===========================================================================
+
+%% TODO: Replace sketch with your preferred notation from docs/theory.rst
+%% and docs/physics.rst.
+
+\subsection{State}
+At tick \(t\) the automaton maintains:
+\begin{itemize}
+  \item binary (or fuzzy) adjacency \(A_t\in\{0,1\}^{p\times p}\),
+  \item node elevations \(E_t\in[0,1]^p\),
+  \item a fixed empirical covariance \(\mathrm{Cov}\) from the data matrix
+        \(X\in\mathbb{R}^{n\times p}\).
+\end{itemize}
+Initialization is edgeless, \(A_0=0\), with a simple elevation schedule
+(e.g.\ linspace) or learned warm-start.
+
+\subsection{One tick}
+Each tick applies, in order:
+\begin{enumerate}
+  \item \textbf{Gravity} --- project elevations so parents sit above children
+        along the undirected skeleton \(U=\max(A,A^\top)\); optional multihop
+        pulls toward two-hop means from \(A A\).
+  \item \textbf{V-well} --- sink elevations at statistical colliders (with
+        parent lift and Sepset screening against backdoor forks).
+  \item \textbf{Death} --- prune edges that become conditionally independent
+        given endpoint-local separator pools of size \(s=1..k\).
+  \item \textbf{Birth} --- add edges that pass Sepset gates and a marginal
+        correlation guard; orientation uses the elevation field.
+\end{enumerate}
+Optional fuzzy mode keeps continuous edge weights in \([0,1]\) and binarizes
+only after the final tick.
+
+\subsection{Output}
+After \(T\) ticks we return the binarized DAG \(A_T\), elevations \(E_T\), and
+optionally the CPDAG of the Markov equivalence class.
+
+% ===========================================================================
+\section{Implementation}
+\label{sec:impl}
+% ===========================================================================
+
+%% TODO: Point to GitHub tag / version you freeze for the preprint.
+
+The reference implementation is the open-source package
+\texttt{causal-automata}~\citep{yamagiwa2026software}
+(\url{https://github.com/kazuyamagiwa/causal-automata}).
+NumPy (\texttt{bayesian.step}) and JAX (\texttt{jax\_core.step} /
+\texttt{run}) share the same physics.
+The JAX path marks \texttt{ticks} and \(k\) as static arguments so scan length
+and partial-correlation block sizes are compile-time constants.
+
+% ===========================================================================
+\section{Experiments}
+\label{sec:experiments}
+% ===========================================================================
+
+%% TODO: Replace with your frozen Benchpress / gCastle tables and figures.
+%% Drop PNGs into figures/ and \includegraphics them.
+
+\subsection{Setup}
+We evaluate on Benchpress~\citep{benchpress} Erdős--Rényi and scale-free DAGs
+with \(p\in\{20,50,80,100\}\), mean degree \(d=4\), \(n=1000\), and seeds
+\(1..10\) (80 cells), on an NVIDIA A10.
+Baselines: PC, NOTEARS, GOLEM (gCastle / Benchpress configurations --- document
+exact versions here).
+
+\subsection{Results}
+Table~\ref{tab:benchpress} sketches the headline numbers from the software
+README (v0.3.6); replace with the table you want frozen in the preprint.
+
+\begin{table}[t]
+  \centering
+  \caption{Benchpress summary (placeholder --- verify before submission).}
+  \label{tab:benchpress}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Algorithm & time (s) & F1 skel. & F1 pattern & SHD pattern \\
+    \midrule
+    Causal Automata & \(0.76\pm0.32\) & \(0.822\pm0.088\) & \(0.754\pm0.121\) & \(50.1\pm40.3\) \\
+    NOTEARS         & \(31.4\pm29.5\) & \(0.896\pm0.056\) & \(0.768\pm0.092\) & \(39.0\pm18.9\) \\
+    PC              & \(80.4\pm342\)  & \(0.888\pm0.061\) & \(0.720\pm0.085\) & \(50.4\pm27.5\) \\
+    GOLEM           & \(18.5\pm11.2\) & \(0.679\pm0.086\) & \(0.469\pm0.084\) & \(95.2\pm55.5\) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+%% Example figure slot (uncomment when you add a PNG):
+% \begin{figure}[t]
+%   \centering
+%   \includegraphics[width=0.95\linewidth]{elevation_convergence}
+%   \caption{From empty grid to recovered DAG (ground-truth ghost in grey).}
+%   \label{fig:hero}
+% \end{figure}
+
+% ===========================================================================
+\section{Discussion and limitations}
+\label{sec:discussion}
+% ===========================================================================
+
+%% TODO: Faithfulness, linearity, continuous data, hyperparameter \(k\), etc.
+
+Assumptions include (approximate) faithfulness and, for Fisher-\(z\) screens,
+linear-Gaussian structure.
+Elevation orientation can err under near-ties; fuzzy mode and multihop gravity
+trade compute for accuracy.
+We leave discrete / mixed-type data and interventional settings to future work.
+
+% ===========================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+% ===========================================================================
+
+Causal automata cast structure learning as synchronous local updates that map
+onto GPU scan loops.
+The accompanying JAX package makes the method practical; this preprint is the
+narrative companion.
+%% TODO: one-sentence takeaway you want cited.
+
+% ===========================================================================
+\section*{Acknowledgments}
+% ===========================================================================
+
+%% TODO: funding, compute credits, feedback.
+We thank early users and benchmark maintainers of Benchpress and gCastle.
+
+% ===========================================================================
+\section*{Data and code availability}
+% ===========================================================================
+
+Source code, docs, and regeneration scripts:
+\url{https://github.com/kazuyamagiwa/causal-automata}.
+Package on PyPI: \texttt{causal-automata}.
+%% TODO: Zenodo DOI for the frozen tarball / this PDF once deposited.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Notation}
+\label{app:notation}
+\begin{center}
+\begin{tabular}{ll}
+  \toprule
+  Symbol & Meaning \\
+  \midrule
+  \(p\) & number of variables \\
+  \(n\) & number of samples \\
+  \(A\) & adjacency matrix \\
+  \(E\) & node elevations \\
+  \(k\) & max conditioning-set size \\
+  \(T\) & number of CA ticks \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\section{Hyperparameters}
+\label{app:hparams}
+%% TODO: list ticks, k, thresholds, seeds, hardware.
+Default estimator: \texttt{CausalAutomaton(ticks=100, k=3)}.
+
+\end{document}
