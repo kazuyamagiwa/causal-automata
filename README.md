@@ -133,12 +133,15 @@ causal-automata/
 │   ├── elevation_convergence.gif
 │   └── elevation_convergence.mp4
 ├── docs/                    # Sphinx / Read the Docs
+├── paper/                   # arXiv / Zenodo / OSF preprint LaTeX template
 ├── tests/
 ├── .readthedocs.yaml
 ├── pyproject.toml
 ├── README.md
 └── NOTICE
 ```
+
+Preprint draft: edit [`paper/main.tex`](paper/main.tex) and build with `make -C paper` (see [`paper/README.md`](paper/README.md)).
 
 ---
 

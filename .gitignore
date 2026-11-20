@@ -21,3 +21,15 @@ wheels/
 # Sphinx / Read the Docs
 docs/_build/
 docs/_autosummary/
+
+# LaTeX preprint build
+paper/build/
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
